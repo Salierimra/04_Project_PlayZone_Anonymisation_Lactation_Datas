@@ -45,12 +45,25 @@ Number of lactation for each alive cows
 
 ### Data Collection
 
-
+Sqlite Database provided by Client
 
 ### Data Cleaning
 
+N/A in this project
 
-### Database creation
+### Copy Pasted table
+
+Three tables are directly copied from the input database to the output database:
+
+- Breed: contains all breeds present in the database
+- ETAPE_CTRL_TEST: contains all possible steps in a lactation control process
+- CTRL_TYPE: contains all possible types of lactation control
+
+### Generated Datas
+
+Two Tables must be generated in order to assure anonymyzation :
+
+- EXPLOITATION : Creating number of farms desired with respect to input database repartition concerning municipality (first two number in postal code -> https://fr.wikipedia.org/wiki/Code_postal_en_Belgique)
 
 
 ### Datawarehouse 
