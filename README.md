@@ -63,8 +63,32 @@ Three tables are directly copied from the input database to the output database:
 
 Two Tables must be generated in order to assure anonymyzation :
 
-- EXPLOITATION : Creating number of farms desired with respect to input database repartition concerning municipality (first two number in postal code -> https://fr.wikipedia.org/wiki/Code_postal_en_Belgique)
+#### EXPLOITATION
 
+Creating number of farms desired with respect to input database repartition concerning municipality (first two number in postal code -> https://fr.wikipedia.org/wiki/Code_postal_en_Belgique)
+
+##### Input DB
+
+<img width="1012" height="467" alt="image" src="https://github.com/user-attachments/assets/ab11e498-99c9-4f60-92fb-e0ae998dbfd7" />
+
+##### Output generated datas
+
+<img width="1012" height="467" alt="image" src="https://github.com/user-attachments/assets/b3a27747-c2d0-413e-b28b-0d4f2c57d9c4" />
+
+#### IDENTANV
+
+Creating number of farms desired with respect to input database repartition concerning number of cows per Postal code and per herd
+
+##### Input DB
+
+<table>
+  <tr>
+    <td><img width="528" alt="image" src="https://github.com/user-attachments/assets/ed66ee64-fe98-46b9-8590-c3466727171e" /></td>
+    <td><img width="528" alt="image" src="https://github.com/user-attachments/assets/9eb6f71a-2937-4f77-ae49-2595ff5e3607" /></td>
+  </tr>
+</table>
+
+##### Output generated datas
 
 ### Datawarehouse 
 
