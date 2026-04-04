@@ -282,21 +282,20 @@ def Data_type_consistency(dst_cur, dst_con):
         print(f"Error during data type consistency : {e}")
         raise #stop script
 
+def Filling_CopyPasted_Tables(src_db,dst_db,df_AIDACTIEL_dst,df_CL_AIDE_ETAPE_CTRL_dst,df_CL_AIDE_TYPE_CTRL_dst):
 
-def Remplir_Tables_Copiées_collées(src_db,dst_db,df_AIDACTIEL_dst,df_CL_AIDE_ETAPE_CTRL_dst,df_CL_AIDE_TYPE_CTRL_dst):
+    """
+    This function takes the following parameters:
+    - the connection to the source database
+    - the connection to the destination database
+    - a DataFrame containing data from the source database for the AIDACTIEL table
+    - a DataFrame containing data from the source database for the CL_AIDE_ETAPE_CTRL table
+    - a DataFrame containing data from the source database for the CL_AIDE_TYPE_CTRL table
 
-    '''
-    Cette fonction prend en paramètre :
-    -   la connexion vers la db source
-    -   La connexion vers la db destination
-    -   un Dataframe comprenant les données de la BDD source pour la table AIDACTIEL
-    -   un Dataframe comprenant les données de la BDD source pour la table CL_AIDE_ETAPE_CTRL
-    -   un Dataframe comprenant les données de la BDD source pour la table CL_AIDE_TYPE_CTRL
+    This function populates the destination database using the DataFrames provided as parameters.
 
-    Cette fonction va remplir la BDD de destination à l'aide des Dataframe rentrés en paramètre
-
-    Cette fonction return un boolean donnant l'information si tout s'est bien passé ou non
-    '''
+    This function returns a boolean indicating whether the process completed successfully or not.
+"""
     Go_on = True
     with sqlite3.connect(src_db, timeout=30) as src_conn, \
         sqlite3.connect(dst_db, timeout=30) as dst_conn:
@@ -308,18 +307,23 @@ def Remplir_Tables_Copiées_collées(src_db,dst_db,df_AIDACTIEL_dst,df_CL_AIDE_E
     return Go_on
 
 def correct_ACTIEL_AIDACTIEL(df):
-    '''
-    Fonction prenant en input un df (le Dataframe ACTIEL_src)
-    Fonction permettant d'assurer le bon type de données dans champ ACTIEL de la table AIDACTIEL
-    Mettre dans la BDD que ACTIEL est un VARCHAR(si ce n'est pas le cas) et qu'il est sous la forme 01,02,10,11,XM,XL
-    Fonction retournant le df source corrigé pret à être mis dans la BDD
-    '''
-    liste_actiel = df['ACTIEL'] #recuperer les données du DF 
+    """
+Function that takes a DataFrame as input (ACTIEL_src DataFrame).
+
+This function ensures that the ACTIEL field in the AIDACTIEL table has the correct data type and format:
+- Sets ACTIEL as a VARCHAR in the database (if not already the case)
+- Ensures values follow the expected format (e.g., 01, 02, 10, 11, XM, XL)
+
+Returns:
+- A corrected DataFrame ready to be inserted into the database
+"""
+
+    liste_actiel = df['ACTIEL'] #recovering data from actiel column of the df
     liste_actiel_ok=[]
     
-    for actiel in liste_actiel: #on parcourt les elements
+    for actiel in liste_actiel: #browse each 'actiel'
         
-        try: #try conversion en int -> crash si actiel = XM XL,...
+        try: #try conversion int -> crash if actiel = XM XL,... (str)
             if len(str(actiel))==4 and str(actiel).find('.')!=-1: #10.0
                 
                 actiel_ok = str(int(actiel))
@@ -335,27 +339,29 @@ def correct_ACTIEL_AIDACTIEL(df):
             actiel_ok = actiel
 
         finally:
-            liste_actiel_ok.append(actiel_ok)#ajoute l'element corrigé à une liste
+            liste_actiel_ok.append(actiel_ok)#prepare final list
     
     
-    df['ACTIEL'] = liste_actiel_ok #modifie le DF AIDACTIEL (champ ACTIEL) source
+    df['ACTIEL'] = liste_actiel_ok #correct input df
     return df
 
-
 def correct_ACTIEL_IDENTANV(df):
-    '''
-    Fonction prenant en input un df (le Dataframe IDENTANV_src)
-    Fonction permettant d'assurer le bon type de données dans champ ACTIEL de la table AIDACTIEL
-    Mettre dans la BDD que ACTIEL est un VARCHAR et qu'il est sous la forme 01,02,10,11,XM,XL
-    Fonction retournant le df source corrigé pret à être mis dans la BDD
-    '''
-    liste_actiel = df['ACTIEL'] #recuperer les données du DF 
+    """
+Function that takes a DataFrame as input (IDENTANV_src DataFrame).
+
+This function ensures that the relevant field(s) in the IDENTANV table have the correct data types and formats.
+
+Returns:
+- pd.DataFrame: cleaned DataFrame ready for database insertion
+"""
+
+    liste_actiel = df['ACTIEL'] #recovering data from actiel column of the df
     liste_actiel_ok=[]
     
     
-    for actiel in liste_actiel: #on parcourt les elements
+    for actiel in liste_actiel: #browse each 'actiel'
         
-        try: #try conversion en int -> crash si actiel = XM XL,...
+        try: #try conversion int -> crash if actiel = XM XL,... (str)
             if len(str(actiel))==4 and str(actiel).find('.')!=-1: #10.0
                 
                 actiel_ok = str(int(actiel))
@@ -375,15 +381,367 @@ def correct_ACTIEL_IDENTANV(df):
 
         finally:
             
-            liste_actiel_ok.append(actiel_ok)#ajoute l'element corrigé à une liste
+            liste_actiel_ok.append(actiel_ok)#prepare final list
             
     
-    df['ACTIEL'] = liste_actiel_ok #modifie le DF AIDACTIEL (champ ACTIEL) source
+    df['ACTIEL'] = liste_actiel_ok #correct input df
     
     return df
 
+def generate_index(nb,start,incr):
+    '''
+    Generates a usable list as an index
+    # starting at the value given as 'start' input
+    # generating a list of 'nb' (input) elements
+    # with an increment of 'incr' (input) between each element
+    '''
+    liste = []
+    liste.append(np.arange(start,start+nb,incr))
+    return liste
+
+def Generate_liste_proportions(df_src, Col_name, N_rows):
+    '''
+
+    This function takes as parameters:
+    -   a DataFrame
+    -   the name of the field in that DataFrame to analyze
+    -   the number of rows to generate
+
+    This function generates a list respecting the value proportions of the source database.
+    This list will be of length [n_rows]
+
+    This function returns a list that can be used in a DataFrame
+    '''
+    
+    series = df_src[Col_name] #  taking only pd.series to be analyze
+    distribution = series.value_counts(normalize=True)     # Calculation values repartition is a DF with values and proportions
+    values = distribution.index.values  # Distinct values array
+    probs = distribution.values #probabilities array
+    
+    # Generating new datas respecting input proportion
+    Generated_datas = np.random.choice(    
+        values,
+        size=N_rows,
+        p=probs
+    )
+    # Créating new DF
+    new_df = pd.DataFrame({    
+       
+        "Gen_datas": Generated_datas
+    })
+
+    return new_df["Gen_datas"].to_list()   # Returning values list matching proportion et elem count
+
+def Filling_exploitation():
+    '''
+    Function to fill the EXPLOITATION table in the database.
+    Returns:
+        - The list of postal codes (CP : XX00)
+        - The list of table indexes (continuous)
+        - A boolean indicating whether everything went smoothly
+        - The number of farms generated
+    '''
+
+    global nb_fermes    # Global var to stock result
+    nb_fermes = None    #Init variable
+    go_on_exploitation = False #boolean statut
+    liste_generated_CP=[]
+    liste_EXPLOITATION_NOTINTEXPL=[]
+    
+    def valider():
+        #Assure number farm to be generated is between 1 et 2000
+        global nb_fermes
+        try:
+            nb_fermes = int(entry.get()) #Ask User
+            if 1 <= nb_fermes <= 2000:
+                
+                root.destroy()  # Close if ok
+            else:
+                messagebox.showerror("Error", "Please enter a number between 1 et 2000")
+        except ValueError:
+                messagebox.showerror("Error", "Please enter a valid number not a string")
+    
+    # Interface creation
+    root = tk.Tk()
+    root.title("Farms generation")
+    root.geometry("400x150")
+    
+    tk.Label(root, text="How many farms do you wish to generate (1-2000) ?", font=("Arial", 10)).pack(pady=15)
+    
+    entry = tk.Entry(root, font=("Arial", 12), width=10, justify='center')
+    entry.pack(pady=5)
+    entry.insert(0, "600")  # Default value
+    entry.focus()  # Focus
+    
+    # Validate with enter key
+    entry.bind('<Return>', lambda e: valider())
+
+    #Define Button
+    tk.Button(root, text="Valider", command=valider, bg="green", fg="white", font=("Arial", 11), padx=20, pady=5).pack(pady=15)
+    
+    root.mainloop()  # Waiting user validation
+    
+    # nb_fermes contains the value
+    
+    if ((nb_fermes is not None) and (nb_fermes!=0)) :
+        df_filter_alive = dfs["EXPLOITATION"][dfs["EXPLOITATION"]["CODPOST"] != 0]#Removing farms with CODPOST = 0 in 
+        def extract_municipality(row):
+            return int((np.floor(row['CODPOST']/100))*100)
+
+        df_filter_alive['Municipality'] = df_filter_alive.apply(extract_municipality,axis=1)
+        df_filter_alive
+        print(f"Generating {nb_fermes} farms...")
+        liste_generated_CP = Generate_liste_proportions(df_filter_alive, "Municipality", nb_fermes) #generation farm number matching Municipality repartition
+        liste_EXPLOITATION_NOTINTEXPL = generate_index(nb_fermes, 200000, 1)#genere l'index
+        
+        go_on_exploitation = True#all good, go on
+    else:
+        print("Opération annulée")
+
+    #retourne les listes des champs de la table exploitation remplies, un boolean pour dire que tout ok et le nb_fermes rentrées par utilisateur
+
+    return liste_generated_CP,liste_EXPLOITATION_NOTINTEXPL,go_on_exploitation,nb_fermes 
+
+def Generate_IDENTANV(src_conn,dst_conn):
+
+    '''
+    Function to generate the IDENTANV table data.
+    Takes as input the source and destination database cursors.
+    Returns a boolean indicating whether everything went smoothly.
+    Returns the dataframe ident_dst ready to be inserted into the database.
+    '''
+    go_on_identanv = False
+
+    # Load used tables
+    ident_src     = pd.read_sql("SELECT * FROM IDENTANV", src_conn)        # source
+    explo_src     = pd.read_sql("SELECT * FROM EXPLOITATION", src_conn)    # source 
+    explo_dst     = pd.read_sql("SELECT * FROM EXPLOITATION", dst_conn)    # destination 
+    aidactiel_dst = pd.read_sql("SELECT * FROM AIDACTIEL", dst_conn)       # destination
+    
+    # Filter CODPOST = 0
+    explo_dst = explo_dst[explo_dst["CODPOST"] != 0].copy()
+
+    # DataType Consistency
+    ident_src["ACTIEL"] = ident_src["ACTIEL"].astype(str)
+    aidactiel_dst["ACTIEL"] = aidactiel_dst["ACTIEL"].astype(str)
+ 
+ 
+    # 1) Jointure source + construction des troupeaux par CP/ferme (vaches vivantes)
+ 
+    # left join between NOINTSANIT and NOINTEXPL
+    ident_src_full = ident_src.merge(
+    explo_src[["NOINTEXPL", "CODPOST"]],
+    left_on="NOINTSANIT",
+    right_on="NOINTEXPL",
+    how="inner"
+    )
+    '''
+        NOAN	SEXEAN	DTNAISANINV	NOINTSANIT	ACTIEL	NOANPERE	NOANMERE	NOINTEXPL	CODPOST
+    0	13665449	F	20050722	111111	      04	13572904.0	13297258.0	111111.0	0.0
+    1	13823337	F	20070116	111111	      02	13450406.0	13361128.0	111111.0	0.0
+    2	13871990	F	20070719	111111	      01	13644969.0	13802699.0	111111.0	0.0
+    3	13882954	F	20070910	111111	      50	13327590.0	13544029.0	111111.0	0.0
+    4	13904626	F	20071219	111111	      04	13776379.0	13486711.0	111111.0	0.0
+
+    '''
+
+    # Filter on alive cows nointsanit <>111111
+    ident_vivantes_full = ident_src_full[ident_src_full["NOINTSANIT"] != 111111]
+    ident_src_full = ident_src_full[ident_src_full["CODPOST"] != 0].copy()
+
+    '''
+    	NOAN	SEXEAN	DTNAISANINV	NOINTSANIT	ACTIEL	NOANPERE	NOANMERE	NOINTEXPL	CODPOST
+    199	15476617	F	20121104	503009	      01	13778903.0	13624379.0	503009.0	7050.0
+    318	15798786	F	20131218	502179	      02	14713824.0	15049136.0	502179.0	6181.0
+    435	16050004	F	20140920	511939	      04	15651422.0	15114705.0	511939.0	7134.0
+    442	16057774	F	20140929	510158	      04	NaN	        15450495.0	510158.0	7830.0
+    460	16082212	F	20141017	615761	      04	15502343.0	15423615.0	615761.0	4730.0
+    '''
+
+    # generating new codpost with only municipality
+    def extract_municipality(row):
+        return int((np.floor(row['CODPOST']/100))*100)
+
+    ident_src_full['Municipality'] = ident_src_full.apply(extract_municipality,axis=1)
 
 
+    ############################### Client wanted us to respect Number of breed per farms and number of cows in herd#########################################
+    
+     # Group (Municipality, NOINTSANIT) -> we got each value of municipality and farm number -> usefull to browse the result of the group by with the loop just after
+    groupes_fermes = ident_src_full.groupby(["Municipality", "NOINTSANIT"])
+    '''
+    	      NOAN	SEXEAN	DTNAISANINV	NOINTSANIT	ACTIEL	NOANPERE	NOANMERE	NOINTEXPL	CODPOST	Municipality
+    199	    15476617	F	20121104	503009	      01	13778903.0	13624379.0	503009	    7050	7000
+    318	    15798786	F	20131218	502179	      02	14713824.0	15049136.0	502179	    6181	6100
+    435	    16050004	F	20140920	511939	      04	15651422.0	15114705.0	511939	    7134	7100
+    442	    16057774	F	20140929	510158	      04	NaN	        15450495.0	510158	    7830	7800
+    460	    16082212	F	20141017	615761	      04	15502343.0	15423615.0	615761	    4730	4700
+    ...	...	...	...	...	...	...	...	...	...	...
+    99463	19564051	F	20210709	605842	      XM	NaN	        19557242.0	605842	    4770	4700
+    99464	19564053	F	20210801	605842	      XM	NaN	        19564052.0	605842	    4770	4700
+    99467	19584005	F	20201216	616690	      04	NaN	        19584004.0	616690	    4790	4700
+    99468	19639291	F	20221016	605842	      XL	NaN	        19639290.0	605842	    4770	4700
+    99469	19753145	F	20230812	616668	      XL	NaN	        19753144.0	616668	    4560	4500
+    '''
+    global s
+    s = groupes_fermes
+    #One DF per farm
+    herds_by_cp = {} #herds_by_cp : {'75001': [df1, df2], '75002': [df3], ...}"
+    all_herds = [] #([df1,df2,df...])
+    
+    for (muni, noint), df_ferme in groupes_fermes:#Browse group by result (muni,nointSANIT) and calling the filter result : df_ferme (number of cows for this farm)
+        
+        #if muni doesn't exist in dictionnary -> create with empty array
+        #else return la associted array to this muni 
+        #herds_by_cp : {'75001': [df1, df2], '75002': [df3], ...}"
+        herds_by_cp.setdefault(muni, []).append(df_ferme)
+        '''
+        print(herds_by_cp)
+        {'1300': [           
+		NOAN 		SEXEAN  DTNAISANINV NOINTSANIT ACTIEL    NOANPERE    NOANMERE   NOINTEXPL  CODPOST Municipality 
+9729   18072079      F     20201108     200448     04  		16422717.0  16017946.0   200448     1325         1300
+12234  18762986      F     20221204     200448     04  		16851768.0  17864360.0   200448     1325         1300
+18343  17417035      F     20181027     200448     02  		16990535.0  16044945.0   200448     1325         1300
+20883  17813280      F     20200114     200448     02  		14609957.0  16894239.0   200448     1325         1300
+22102  18404666      F     20211027     200448     04  		17804965.0  17162002.0   200448     1325         1300
+23006  18153554      F     20210201     200448     04  		16854865.0  16295186.0   200448     1325         1300,
+ 
+		NOAN 		SEXEAN  DTNAISANINV NOINTSANIT ACTIEL    NOANPERE    NOANMERE   NOINTEXPL  CODPOST Municipality 
+6067   17122757      F     20171130     201309     04  		16626158.0  15959221.0   201309     1360         1300
+7362   17867367      F     20200306     201309     04  		16821999.0  16767772.0   201309     1360         1300
+21915  18312975      F     20210630     201309     40  		16668665.0  17444327.0   201309     1360         1300 ]}
+        '''
+        all_herds.append(df_ferme)#add the dataframe in the array
+    '''
+    print(all_herds)
+    
+    [NOAN       SEXEAN  DTNAISANINV NOINTSANIT ACTIEL     NOANPERE    NOANMERE   NOINTEXPL  CODPOST Municipality
+    17605333      F     20190506     511938     02      16755746.0  16690281.0   511938     7812         7800     
+    17812125      F     20200113     511938     02      16755746.0  15976471.0   511938     7812         7800  
+    17978025      F     20200701     511938     02      16755746.0  16115164.0   511938     7812         7800  
+    17980124      F     20200707     511938     02      16755746.0  16432997.0   511938     7812         7800 
+    18698749      F     20220920     511938     02      17725169.0  17162259.0   511938     7812         7800,
+    NOAN       SEXEAN  DTNAISANINV NOINTSANIT ACTIEL     NOANPERE    NOANMERE   NOINTEXPL  CODPOST Municipality
+    18072079      F     20201108     200448     04      16422717.0  16017946.0    200448     1325        1300      
+    18762986      F     20221204     200448     04      16851768.0  17864360.0   200448     1325         1300  
+    17417035      F     20181027     200448     02      16990535.0  16044945.0   200448     1325         1300]
+    
+    '''
+    
+    # data type consistency ACTIEL like AIDACTIEL
+    def format_actiel(value):
+        s = str(value).strip()
+
+        # ex : "5.0" -> "5")
+        if s.endswith(".0"):
+            s = s[:-2]
+
+        # if only number -> format "01", "02", ..., "10"
+        if s.isdigit():
+            s = s.zfill(2)   # "1" -> "01", "9" -> "09", "10" -> "10"
+
+        # else no action
+        return s
+    
+
+    
+    # Init Arrays
+    muni_list = []         # array municipality for each generated cows
+    nointsanit_list = [] # NOINTSANIT destination farms for each cows
+    dtnais_list = []     # bithdte for each cows
+    actiel_list = []     # breed for each cows
+
+    # Pour chaque CP destination, on assigne des troupeaux source
+    for cp_dest, fermes_dest_cp in explo_dst.groupby("CODPOST"):#parcourt des fermes de destination groupé par CP
+        fermes_dest_cp = fermes_dest_cp.reset_index(drop=True)#reset l'index à chaque fois
+
+        # Troupeaux source disponibles(existants) pour ce CP -> on utilise un des troupeau df1 ou df2 par exemple {'75001': [df1, df2]
+        if cp_dest in herds_by_cp:
+            herds_src = herds_by_cp[cp_dest]
+        else:
+            # Si aucun troupeau pour ce CP, on utilise tous les troupeaux comme fallback
+            herds_src = all_herds
+
+        if not herds_src:
+            continue  # sécurité si vraiment vide
+
+        nb_fermes_dest = len(fermes_dest_cp)
+
+        # On crée une liste de troupeaux assignés aux fermes dest :
+        # on répète la liste des troupeaux source jusqu'à couvrir toutes les fermes dest,
+        # puis on tronque à la bonne taille et on mélange.
+        troupeaux_assignes = []
+        while len(troupeaux_assignes) < nb_fermes_dest:#tant qu'on a pas rempli toutes les fermes de destination
+            troupeaux_assignes.extend(herds_src)
+        troupeaux_assignes = troupeaux_assignes[:nb_fermes_dest] #assure la taille de nombre de troupeau
+        random.shuffle(troupeaux_assignes) #shuffle pour eviter un biais
+
+        # Pour chaque ferme destination de ce CP, on copie le troupeau associé
+        for i, (_, ferme_dest) in enumerate(fermes_dest_cp.iterrows()):#pour chaque ferme destination
+            noint_dest = ferme_dest["NOINTEXPL"]
+            troupeau_src = troupeaux_assignes[i]#recupere le troupeau assigné à cette position
+
+            for _, vache_src in troupeau_src.iterrows():#parcourt toutes les vaches de ce troupeau
+                #ajoute le CP, le NotiNSANIT la date de naissance et ACTIEL dans leurs listes respectives
+                muni_list.append(cp_dest)
+                nointsanit_list.append(noint_dest)
+                dtnais_list.append(vache_src["DTNAISANINV"])
+                # ACTIEL formaté comme dans AIDACTIEL (01, 02, ..., CL, CV, ...)
+                actiel_list.append(format_actiel(vache_src["ACTIEL"]))
+
+    # Nombre total de vaches générées
+    n_animaux = len(muni_list)
+    print("Nombre de fermes destination :", explo_dst.shape[0])
+    print("Nombre de vaches générées :", n_animaux)
+
+    # NOAN : identifiants uniques dans l'intervalle (on peut le changer si nécessaire)
+    NOAN_MIN = 13_665_449
+    NOAN_MAX = 19_639_291
+    noan_list = random.sample(range(NOAN_MIN, NOAN_MAX), n_animaux)
+
+    # SEXEAN : toutes femelles
+    sexean_list = ['F'] * n_animaux
+
+    # 5) NOANPERE / NOANMERE (version simple)
+#    - Père = valeurs arbitraires (même format que NOAN)
+#    - Mère = une vache existante choisie aléatoirement
+    noanpere_list = []
+    noanmere_list = []
+
+    # Format identique aux NOAN
+    PERE_MIN = 99_000_000
+    PERE_MAX = 99_999_999
+
+    for _ in range(n_animaux):
+    
+        # Père :
+        pere = random.randint(PERE_MIN, PERE_MAX)
+    
+        # Mère : une vache existante (NOAN) ou None
+        if random.random() < 0.8:   # 80% ont une mère connue (simple, crédible)
+            mere = random.choice(noan_list)
+        else:
+            mere = None
+    
+        noanpere_list.append(pere)
+        noanmere_list.append(mere)
+    # 6) Construction du DataFrame IDENTANV destination + insertion
+
+    ident_dst = pd.DataFrame({
+        "NOAN": noan_list,
+        "SEXEAN": sexean_list,
+        "DTNAISANINV": dtnais_list,
+        "NOINTSANIT": nointsanit_list,
+        "ACTIEL": actiel_list,
+        "NOANPERE": noanpere_list,
+        "NOANMERE": noanmere_list,
+    })
+    ident_dst["NOANPERE"] = ident_dst["NOANPERE"].astype("Int64")   # entier nullable
+    ident_dst["NOANMERE"] = ident_dst["NOANMERE"].astype("Int64")   # entier nullable
+
+    go_on_identanv = True
+ 
+    return go_on_identanv,ident_dst
 
 
 
@@ -521,27 +879,75 @@ if __name__ == "__main__":
 
     ##############################################################################################################
     #                                                                                                            
-    #                                         7 - Insertion des données                                                                                     #
+    #                                         7 - Datas filling                                                                                     #
     #                                                                                                                
     ##############################################################################################################  
             
-            print("7 - Insertion des données") 
+            print("7 - Datas Filling") 
     ##############################################################################################################
-    # 7.1 Insertion des données copiées collées de la source vers la destination
+    # 7.1 Copy Pasted Tables
     ##############################################################################################################
             
-            print("     7.1 - Insertion des données sans modification (AIDACTIEL / CL_AIDE_ETAPE_CTRL / CL_AIDE_TYPE_CTRL)") 
-            Go_on_tables_CC = Remplir_Tables_Copiées_collées(input_db,output_db,df_AIDACTIEL_dst,df_CL_AIDE_ETAPE_CTRL_dst,df_CL_AIDE_TYPE_CTRL_dst)
+            print("     7.1 - Filling tables (AIDACTIEL / CL_AIDE_ETAPE_CTRL / CL_AIDE_TYPE_CTRL)") 
+            Go_on_tables_CC = Filling_CopyPasted_Tables(input_db,output_db,df_AIDACTIEL_dst,df_CL_AIDE_ETAPE_CTRL_dst,df_CL_AIDE_TYPE_CTRL_dst)
             df_AIDACTIEL_src_corrected = correct_ACTIEL_AIDACTIEL(dfs['AIDACTIEL'])
             
             df_IDENTANV_src_corrected = correct_ACTIEL_IDENTANV(dfs['IDENTANV'])
-            df_AIDACTIEL_src_corrected.to_sql("AIDACTIEL", src_conn, if_exists="replace", index=False) #insertion BDD source
-            df_IDENTANV_src_corrected.to_sql("IDENTANV", src_conn, if_exists="replace", index=False) #insertion BDD source
-  
+            df_AIDACTIEL_src_corrected.to_sql("AIDACTIEL", src_conn, if_exists="replace", index=False) #insert input DB
+            df_IDENTANV_src_corrected.to_sql("IDENTANV", src_conn, if_exists="replace", index=False) #insert input DB
+
+            if Go_on_tables_CC:
+    ##############################################################################################################
+    #7.2 Generating/Filling datas tables EXPLOITATION(farms creation) / IDENTANV(cows creation)
+    ############################################################################################################## 
+                  
+                print("     7.2 - Filling generated datas (EXPLOITATION / IDENTANV)") 
+                ##############################################################################################################
+                    #7.2.1 Generating/Filling datas table EXPLOITATION(farms creation)
+                ##############################################################################################################   
+                   
+                print("         7.2.1 Generation table EXPLOITATION")
+                liste_generated_CP,liste_EXPLOITATION_NOTINTEXPL,go_on_exploitation,nb_fermes=Filling_exploitation()
+                if go_on_exploitation:
+                    #Table EXPLOITATION
+                    
+                    df_EXPLOITATION_dst["NOINTEXPL"] = liste_EXPLOITATION_NOTINTEXPL[0] #Remplir le champ NOINTEXPL du DATAFRAME de destination
+                    df_EXPLOITATION_dst["CODPOST"] = liste_generated_CP #Remplir le champ CODPOST du DATAFRAME de destination
+                    df_EXPLOITATION_dst= df_EXPLOITATION_dst[['NOINTEXPL', 'CODPOST']]
+                
+                    df_EXPLOITATION_dst.to_sql("EXPLOITATION", dst_conn, if_exists="replace", index=False) #insertion BDD dest
+                    
+                ##############################################################################################################
+                    #7.2.2 Generating/Filling datas table IDENTANV(cows generation)
+                ##############################################################################################################   
+                    
+                    print("         7.2.2 Generation table IDENTANV")
+                    
+                    go_on_identanv,df_IDENTANV_dst = Generate_IDENTANV(src_conn,dst_conn) #Filling DF output
+                    df_IDENTANV_dst.to_sql("IDENTANV", dst_conn, if_exists="replace", index=False)#mettre a jour la BDD
+
+                    if go_on_identanv:
+
+    ##############################################################################################################
+    # 7.3 Generation et insertion des données CL_LAITEXPL/CL_LAITLACT/CL/LAITCTRL
+    ##############################################################################################################  
+                        
+                        print("     7.3 - Insertion des données générées et regressées (CL_LAITLACT / CL_LAIT_EXPL / CL_LAIT_CTRL)") 
+
+                    else:#Go_on_exploitation
+                        dst_cur.execute("PRAGMA foreign_keys = ON;")
+                        src_conn.close()
+                        dst_conn.close()
+            else:#Go_on_tables_CC
+                dst_cur.execute("PRAGMA foreign_keys = ON;")
+                
+                src_conn.close()
+                dst_conn.close()
         else:# Go_on_filling_output_tables
             dst_cur.execute("PRAGMA foreign_keys = ON;")
             src_conn.close()
             dst_conn.close()
+
     else:#Go_on_Suppression
         pass
     
