@@ -528,41 +528,30 @@ def Generate_IDENTANV(src_conn,dst_conn):
  
     # 1) Jointure source + construction des troupeaux par CP/ferme (vaches vivantes)
  
-    # left join between NOINTSANIT and NOINTEXPL
+    # Jointure source : vache + ferme + code postal
     ident_src_full = ident_src.merge(
     explo_src[["NOINTEXPL", "CODPOST"]],
     left_on="NOINTSANIT",
     right_on="NOINTEXPL",
     how="inner"
     )
-    '''
-        NOAN	SEXEAN	DTNAISANINV	NOINTSANIT	ACTIEL	NOANPERE	NOANMERE	NOINTEXPL	CODPOST
-    0	13665449	F	20050722	111111	      04	13572904.0	13297258.0	111111.0	0.0
-    1	13823337	F	20070116	111111	      02	13450406.0	13361128.0	111111.0	0.0
-    2	13871990	F	20070719	111111	      01	13644969.0	13802699.0	111111.0	0.0
-    3	13882954	F	20070910	111111	      50	13327590.0	13544029.0	111111.0	0.0
-    4	13904626	F	20071219	111111	      04	13776379.0	13486711.0	111111.0	0.0
 
-    '''
-
-    # Filter on alive cows nointsanit <>111111
+    # On garde uniquement les vaches vivantes : NOINTSANIT != 111111 ou CODPOST != 0
     ident_vivantes_full = ident_src_full[ident_src_full["NOINTSANIT"] != 111111]
     ident_src_full = ident_src_full[ident_src_full["CODPOST"] != 0].copy()
 
-    '''
-    	NOAN	SEXEAN	DTNAISANINV	NOINTSANIT	ACTIEL	NOANPERE	NOANMERE	NOINTEXPL	CODPOST
-    199	15476617	F	20121104	503009	      01	13778903.0	13624379.0	503009.0	7050.0
-    318	15798786	F	20131218	502179	      02	14713824.0	15049136.0	502179.0	6181.0
-    435	16050004	F	20140920	511939	      04	15651422.0	15114705.0	511939.0	7134.0
-    442	16057774	F	20140929	510158	      04	NaN	        15450495.0	510158.0	7830.0
-    460	16082212	F	20141017	615761	      04	15502343.0	15423615.0	615761.0	4730.0
-    '''
+    
 
-    # generating new codpost with only municipality
     def extract_municipality(row):
+       
         return int((np.floor(row['CODPOST']/100))*100)
 
     ident_src_full['Municipality'] = ident_src_full.apply(extract_municipality,axis=1)
+    display(ident_src_full.shape)
+
+    # Clean both columns before groupby
+    ident_src_full['Municipality'] = ident_src_full['Municipality'].astype(str).str.strip()
+    ident_src_full['NOINTSANIT']   = ident_src_full['NOINTSANIT'].astype(str).str.strip()
 
 
     ############################### Client wanted us to respect Number of breed per farms and number of cows in herd#########################################
@@ -644,88 +633,127 @@ def Generate_IDENTANV(src_conn,dst_conn):
         return s
     
 
-    
     # Init Arrays
     muni_list = []         # array municipality for each generated cows
     nointsanit_list = [] # NOINTSANIT destination farms for each cows
     dtnais_list = []     # bithdte for each cows
     actiel_list = []     # breed for each cows
 
-    # Pour chaque CP destination, on assigne des troupeaux source
-    for cp_dest, fermes_dest_cp in explo_dst.groupby("CODPOST"):#parcourt des fermes de destination groupé par CP
-        fermes_dest_cp = fermes_dest_cp.reset_index(drop=True)#reset l'index à chaque fois
+    def extract_municipality(row):
+       
+        return int((np.floor(row['CODPOST']/100))*100)
 
-        # Troupeaux source disponibles(existants) pour ce CP -> on utilise un des troupeau df1 ou df2 par exemple {'75001': [df1, df2]
+    explo_dst['Municipality'] = explo_dst.apply(extract_municipality,axis=1)
+
+    # For each Municipality, a herd is assigned
+    for cp_dest, fermes_dest_cp in explo_dst.groupby("Municipality"):#Browse
+
+        '''
+        print(cp_dest)
+        print(fermes_dest_cp)
+        1300
+            NOINTEXPL  CODPOST  Municipality
+        25      200025     1300          1300
+        43      200043     1300          1300
+        83      200083     1300          1300
+        125     200125     1300          1300
+        161     200161     1300          1300
+        287     200287     1300          1300
+        291     200291     1300          1300
+        394     200394     1300          1300
+        425     200425     1300          1300
+        484     200484     1300          1300
+        505     200505     1300          1300
+        509     200509     1300          1300
+        '''
+        
+        fermes_dest_cp = fermes_dest_cp.reset_index(drop=True)#reset index each time
+        
+        # Herds available for this CP if key CP in dictionnary-> use one df for this key  {'7500': [df1, df2]
         if cp_dest in herds_by_cp:
             herds_src = herds_by_cp[cp_dest]
         else:
-            # Si aucun troupeau pour ce CP, on utilise tous les troupeaux comme fallback
+            # if key doesn't exist -> use one df from all key
             herds_src = all_herds
 
         if not herds_src:
-            continue  # sécurité si vraiment vide
+            continue  # safety continue
 
-        nb_fermes_dest = len(fermes_dest_cp)
-
-        # On crée une liste de troupeaux assignés aux fermes dest :
-        # on répète la liste des troupeaux source jusqu'à couvrir toutes les fermes dest,
-        # puis on tronque à la bonne taille et on mélange.
+        nb_fermes_dest = len(fermes_dest_cp) # number of farm for this CP in destination 12 means there are 12 farms to fill
+        
         troupeaux_assignes = []
-        while len(troupeaux_assignes) < nb_fermes_dest:#tant qu'on a pas rempli toutes les fermes de destination
+        while len(troupeaux_assignes) < nb_fermes_dest:#while not each farm filled for this cp
+            
             troupeaux_assignes.extend(herds_src)
-        troupeaux_assignes = troupeaux_assignes[:nb_fermes_dest] #assure la taille de nombre de troupeau
-        random.shuffle(troupeaux_assignes) #shuffle pour eviter un biais
+            '''
+            print(troupeaux_assignes)
+            [           NOAN SEXEAN  DTNAISANINV NOINTSANIT ACTIEL    NOANPERE    NOANMERE  NOINTEXPL  CODPOST Municipality 
+            9729   18072079      F     20201108     200448     04  16422717.0  16017946.0   200448     1325         1300
+            12234  18762986      F     20221204     200448     04  16851768.0  17864360.0   200448     1325         1300
+            18343  17417035      F     20181027     200448     02  16990535.0  16044945.0   200448     1325         1300
+            ...,
+                        NOAN SEXEAN  DTNAISANINV NOINTSANIT ACTIEL    NOANPERE    NOANMERE  NOINTEXPL  CODPOST Municipality 
+            6067   17122757      F     20171130     201309     04  16626158.0  15959221.0   201309     1360         1300 
+            7362   17867367      F     20200306     201309     04  16821999.0  16767772.0   201309     1360         1300 
+            21915  18312975      F     20210630     201309     40  16668665.0  17444327.0   201309     1360         1300 
+            ...,
+            
+            ...]
+            '''
+            
+        troupeaux_assignes = troupeaux_assignes[:nb_fermes_dest] #assure nomber of herds to be generated
+        
+        random.shuffle(troupeaux_assignes) #shuffle to prevent bias
 
-        # Pour chaque ferme destination de ce CP, on copie le troupeau associé
-        for i, (_, ferme_dest) in enumerate(fermes_dest_cp.iterrows()):#pour chaque ferme destination
+        # For each dest farm we copy the herds
+        for i, (_, ferme_dest) in enumerate(fermes_dest_cp.iterrows()):#for each farm dest
             noint_dest = ferme_dest["NOINTEXPL"]
-            troupeau_src = troupeaux_assignes[i]#recupere le troupeau assigné à cette position
+            troupeau_src = troupeaux_assignes[i]#recovering the matching herd
 
-            for _, vache_src in troupeau_src.iterrows():#parcourt toutes les vaches de ce troupeau
-                #ajoute le CP, le NotiNSANIT la date de naissance et ACTIEL dans leurs listes respectives
-                muni_list.append(cp_dest)
-                nointsanit_list.append(noint_dest)
-                dtnais_list.append(vache_src["DTNAISANINV"])
-                # ACTIEL formaté comme dans AIDACTIEL (01, 02, ..., CL, CV, ...)
+            for _, vache_src in troupeau_src.iterrows():#for each cows in this herd
+                muni_list.append(cp_dest) #add cp
+                nointsanit_list.append(noint_dest) #add NOINTSANIT
+                dtnais_list.append(vache_src["DTNAISANINV"]) #add birthdate
+                # ACTIEL formated like AIDACTIEL (01, 02, ..., CL, CV, ...)
                 actiel_list.append(format_actiel(vache_src["ACTIEL"]))
-
-    # Nombre total de vaches générées
+    
+    # Total number cows generated
     n_animaux = len(muni_list)
-    print("Nombre de fermes destination :", explo_dst.shape[0])
-    print("Nombre de vaches générées :", n_animaux)
+    print("Destination farms count :", explo_dst.shape[0])
+    print("Generated cows count :", n_animaux)
 
-    # NOAN : identifiants uniques dans l'intervalle (on peut le changer si nécessaire)
+    # NOAN : convention as is, could be changed
     NOAN_MIN = 13_665_449
     NOAN_MAX = 19_639_291
     noan_list = random.sample(range(NOAN_MIN, NOAN_MAX), n_animaux)
 
-    # SEXEAN : toutes femelles
+    # SEXEAN : all cows -> sexe = F
     sexean_list = ['F'] * n_animaux
 
-    # 5) NOANPERE / NOANMERE (version simple)
-#    - Père = valeurs arbitraires (même format que NOAN)
-#    - Mère = une vache existante choisie aléatoirement
+    # 5) NOANPERE / NOANMERE (simple version)
+#    - NOAMPERE = arbitrary (same format as NOAN)
+#    - NOANMERE = random existing generated cows
     noanpere_list = []
     noanmere_list = []
 
-    # Format identique aux NOAN
+    # Format as NOAN
     PERE_MIN = 99_000_000
     PERE_MAX = 99_999_999
 
-    for _ in range(n_animaux):
+    for _ in range(n_animaux): #for each cows
     
-        # Père :
+        # NOANPERE :
         pere = random.randint(PERE_MIN, PERE_MAX)
     
-        # Mère : une vache existante (NOAN) ou None
-        if random.random() < 0.8:   # 80% ont une mère connue (simple, crédible)
+        # NOANMERE
+        if random.random() < 0.8:   # 80% got a mother known (arbitrary)
             mere = random.choice(noan_list)
         else:
             mere = None
     
         noanpere_list.append(pere)
         noanmere_list.append(mere)
-    # 6) Construction du DataFrame IDENTANV destination + insertion
+    # 6) DF construction
 
     ident_dst = pd.DataFrame({
         "NOAN": noan_list,
@@ -738,10 +766,13 @@ def Generate_IDENTANV(src_conn,dst_conn):
     })
     ident_dst["NOANPERE"] = ident_dst["NOANPERE"].astype("Int64")   # entier nullable
     ident_dst["NOANMERE"] = ident_dst["NOANMERE"].astype("Int64")   # entier nullable
-
+    
     go_on_identanv = True
- 
+    
+
     return go_on_identanv,ident_dst
+    
+
 
 
 
