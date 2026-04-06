@@ -90,8 +90,18 @@ Creating number of farms desired with respect to input database repartition conc
 
 ##### Output generated datas
 
-### Datawarehouse 
+Not perfect but sometimes the random doesn't really represents really -> accepted by client
 
+<table>
+  <tr>
+    <td><img width="528" alt="image" src="https://github.com/user-attachments/assets/9f9cf74a-25c7-4e31-9d21-74a22e6af753" /></td>
+    <td><img width="528" alt="image" src="https://github.com/user-attachments/assets/c710738a-f36d-47e4-ac3e-7d90f44de401" /></td>
+  </tr>
+</table>
+
+#### CLLAITEXPL
+
+Farms control 
 
 
 ### Deep Learning
