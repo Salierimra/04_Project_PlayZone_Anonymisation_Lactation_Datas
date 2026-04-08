@@ -772,8 +772,215 @@ def Generate_IDENTANV(src_conn,dst_conn):
 
     return go_on_identanv,ident_dst
     
+def Generate_CLLAITEXPL(src_conn,dst_conn):
+   
+    """ 
+    Function allowing to generate control type for each farms in EXPLOITATION table
+    Args :
+        Source/destination connector SQL
+    Returns:
+        go_on_CLLAITEXPLT, : Boolean everything ok 
+        milkexpl_df['ID_LAITEXPL'].tolist(), : DF representing ID LAITEXPL
+        milkexpl_df['NOINTEXPL'].tolist(),\ : DF representing NOINTEXPL(number of the farm) LAITEXPL
+        milkexpl_df['DATE_CTRL'].tolist(), : DF representing DATE_CTRL LAITEXPL
+        milkexpl_df['TRAIT1'].tolist(),\ : DF representing TRAIT1(AM or PM) LAITEXPL
+        milkexpl_df['CD_TYPE_CTRL'].tolist(), : DF representing CD_TYPE_CTRL (type of control used for the farms -> each farm has only one type control) LAITEXPL
+        milkexpl_df['DATE_RECEPT_ANALYSE'].tolist(),\ : DF representing DATE RECEPTION ANALYSE to the lab LAITEXPL
+        milkexpl_df['CD_ETAPE_CTRL'].tolist() : DF representing control step LAITEXPL
 
+   -"""
+    
+    df_expl_dst = pd.read_sql("SELECT * FROM EXPLOITATION", dst_conn) # destination EXPLOITATION
+    df_CLLAITEXPL_src = pd.read_sql("Select * from CL_LAITEXPL", src_conn) # source CL_LAITEXPL
+    go_on_CLLAITEXPLT = False
 
+    fk_list = df_expl_dst['NOINTEXPL'].values  # array of farms number from exploitation destination
+    nb_fk_list = len(fk_list)# Count farms exploitation destination
+
+   #  Creating DF with UNIQUE farm number with a UNIQUE control type
+    df_farmNb_unique = df_CLLAITEXPL_src[['NOINTEXPL', 'CD_TYPE_CTRL']].drop_duplicates(subset='NOINTEXPL') #subset : colomn to be considerate to drop duplicates
+
+    df_farmNb_unique = df_farmNb_unique[df_farmNb_unique['CD_TYPE_CTRL'].notna()] #deleting farms without a defined control type
+    df_farmNb_unique['CD_TYPE_CTRL'] = df_farmNb_unique['CD_TYPE_CTRL'].astype(int)# CD_TYPE_CTRL -as type int
+
+   # Client request : control type = {1,2,9,10}
+    allowed_vals = [1, 2, 9, 10]
+    df_farmNb_unique = df_farmNb_unique[df_farmNb_unique['CD_TYPE_CTRL'].isin(allowed_vals)] #filter with criteria = client request
+
+   # Generate new control type for new farm (destination)
+    labels_CD_TYPE_CTRL = Generate_liste_proportions(
+       df_farmNb_unique,  # DF with unique farm number
+       'CD_TYPE_CTRL', #colomn to be considered
+       nb_fk_list #Farm number exploitation destination
+       )
+    #Creating new DF farms/type contol info
+    farms_Nb_CtrlType_info = pd.DataFrame({
+       'NOINTEXPL': fk_list,
+       'CD_TYPE_CTRL' : labels_CD_TYPE_CTRL
+   })
+
+    '''
+    Count control for each farm depending on type controle for this farm:
+    A4/AT4 (1,9) -> 4 weeks -> 28 jours;
+    A6/AT6 (2,10) -> 6 weeks -> 42 jours.
+    Considering 5 years -> Client request
+    '''
+    
+    days_5y = 5 * 365 # 5 years
+   
+    n_4w = int(np.floor(days_5y / 28)) + 1   # find number of control considering 28 days between control
+    n_6w = int(np.floor(days_5y / 42)) + 1   # find number of control considering 42 days between control
+   
+    rows = [] 
+    for _, row in farms_Nb_CtrlType_info.iterrows():# Browse each farms
+        Nointexpl = row['NOINTEXPL'] # Extract farm number
+        label = str(row['CD_TYPE_CTRL']) # Extract TYPE_CTRL str
+
+        if label in ['1', '9']:#if ctrl = 1 ou 9 (A4 ou AT4)
+            n_rows = n_4w   # 4 weeks between ctrl
+            interval_type = '4w'
+        else:#else (A6 ou AT6)
+            n_rows = n_6w   # 6 weeks between ctrl
+            interval_type = '6w'
+
+        for i in range(n_rows):
+            # append in array dictionnary with farm name, type ctrl and interval
+            rows.append({
+                'NOINTEXPL': Nointexpl,
+                'CD_TYPE_CTRL': label,
+                'interval_type': interval_type # 4w 6w
+            })
+
+    #Creating DF with the right number of final rows -> will be returned
+    milkexpl_df = pd.DataFrame(rows) 
+
+    
+    start_id = 700000
+    milkexpl_df.insert(0, 'ID_LAITEXPL', np.arange(start_id, start_id + len(milkexpl_df))) #inserting into DF an ID
+    
+    #fill CD_ETAPE_CTRL with source proportion
+    milkexpl_df['CD_ETAPE_CTRL'] = Generate_liste_proportions(
+        df_CLLAITEXPL_src, ## CL_LAIT_EXPL - source
+        'CD_ETAPE_CTRL',
+        len(milkexpl_df)) #nb
+    
+    #------------------------------------------------------------------------------
+    #Filling DATE_CTRL 
+
+    years_first = 5 # 5 years ago first ctrl
+    end_global   = pd.Timestamp.today().normalize()# TODAY
+    start_global = end_global - pd.DateOffset(years=5) # Global periode (TODAY - 5 years)
+    milkexpl_df['DATE_CTRL'] = pd.NaT
+
+   # Specific periode = global periode
+    start_first = start_global 
+    end_first = start_global + pd.DateOffset(years=years_first)
+   
+   #For each farm
+    for fk, grp in milkexpl_df.groupby('NOINTEXPL'): #For each farm
+        interval_type = grp['interval_type'].iloc[0]#recovering '4w' or '6w'
+        step_days = 28 if interval_type == "4w" else 42
+        n_rows = len(grp)
+        ##############################################
+        # Select one date in defined interval
+        total_days_first = (end_first - start_first).days
+        offset_days = np.random.randint(0, total_days_first + 1)#randoms timedelta
+        first_date = start_first + pd.Timedelta(days=offset_days) #First control defined
+
+        # Nb control possible for this farm
+        remaining_days = (end_global - first_date).days#nb days between first control and today
+        max_controls_here = remaining_days // step_days + 1  #count possible control
+    
+        #security
+        n_rows_adjusted = min(n_rows, max_controls_here)
+
+        # security
+        if n_rows_adjusted <= 0:
+            continue
+
+        # generate dates with step_days (28 or 42 days)
+        dates = [
+            first_date + pd.Timedelta(days=i * step_days)
+            for i in range(n_rows_adjusted)
+        ]
+        milkexpl_df.loc[grp.index[:n_rows_adjusted], "DATE_CTRL_dt"] = dates #fill DF with dates array
+    milkexpl_df['DATE_CTRL'] = milkexpl_df['DATE_CTRL_dt'].dt.strftime('%Y-%m-%d') #format str
+
+    #------------------------------------------------------------------------------
+    #Calculate avg duration between analyse reception to the lab and control date
+   
+    df_CLLAITEXPL_src['DATE_CTRL_dt'] = pd.to_datetime(df_CLLAITEXPL_src['DATE_CTRL']) #format
+    df_CLLAITEXPL_src['DATE_RECEPT_ANALYSE'] = pd.to_datetime(df_CLLAITEXPL_src['DATE_RECEPT_ANALYSE']) #format
+
+    #Let's find the last control date in the last 12 months (client request)
+    last_date = df_CLLAITEXPL_src['DATE_CTRL_dt'].max() #find last date
+    one_year_before = last_date - pd.DateOffset(years=1) #define date 12 months ago
+    
+   # filter 12 lasts months
+    df_last12 = df_CLLAITEXPL_src[(df_CLLAITEXPL_src['DATE_CTRL_dt'] >= one_year_before) & (df_CLLAITEXPL_src['DATE_CTRL_dt'] <= last_date)].copy()
+
+   # calculate time delta
+   
+    df_last12['delta_days'] = (df_last12['DATE_RECEPT_ANALYSE'] - df_last12['DATE_CTRL_dt']).dt.days
+
+   # Average
+    avg_delta = df_last12['delta_days'].mean()
+    avg_delta_days = int(round(avg_delta))
+
+   #####################################################################################
+   ###################################################################################
+
+    #Trnsform the timedelta (days count) in timedelta  and calculate Date recpt
+
+    milkexpl_df['DATE_RECEPT_ANALYSE_dt'] = milkexpl_df['DATE_CTRL_dt'] + pd.to_timedelta(avg_delta_days, unit='D')
+    milkexpl_df['DATE_RECEPT_ANALYSE'] = milkexpl_df['DATE_RECEPT_ANALYSE_dt'].dt.strftime('%Y-%m-%d')
+    #-------------------------------------------------------------------------------------------
+    #  Type control A ∈ {1,2}  repartition AM/PM according to proportion source
+
+    mask_12 = milkexpl_df['CD_TYPE_CTRL'].isin(['1', '2'])
+    nmbre_12 = mask_12.sum()
+
+    df_old_12 = df_CLLAITEXPL_src[df_CLLAITEXPL_src['CD_TYPE_CTRL'].isin([1, 2])]
+    milkexpl_df.loc[mask_12, 'TRAIT1'] = Generate_liste_proportions(
+        df_old_12,   
+        'TRAIT1',      
+        nmbre_12)   
+         
+   #  Type contol AT ∈ {9,10} → alternate AM / PM (filtre le DF)
+    mask_910 = milkexpl_df['CD_TYPE_CTRL'].isin(['9', '10'])
+
+    for fk, grp in milkexpl_df[mask_910].groupby('NOINTEXPL'):#for each farms with type control AT
+        grp_sorted = grp.sort_values('DATE_CTRL_dt')
+        idx = grp_sorted.index
+        n = len(idx)
+
+        # random start: AM ou PM
+        first_val = np.random.choice(['AM', 'PM'])
+
+        # sequence AM/PM/AM/PM...
+        values = []
+        current = first_val
+        for _ in range(n):
+            values.append(current)
+            current = 'PM' if current == 'AM' else 'AM'
+
+        # fill TRAIT1 for this lines
+        milkexpl_df.loc[idx, 'TRAIT1'] = values
+
+    milkexpl_df = milkexpl_df[milkexpl_df["DATE_CTRL_dt"].notna()].copy()
+    #sort by farm number and control date
+    milkexpl_df = milkexpl_df.sort_values(["NOINTEXPL", "DATE_CTRL_dt"]).reset_index(drop=True)
+   # ID
+    start_id = 700000
+    milkexpl_df["ID_LAITEXPL"] = range(start_id, start_id + len(milkexpl_df))
+      
+    # Final DF
+    milkexpl_df = milkexpl_df[['ID_LAITEXPL', 'NOINTEXPL', 'DATE_CTRL', 'TRAIT1', 'CD_TYPE_CTRL', 'DATE_RECEPT_ANALYSE', 'CD_ETAPE_CTRL']]
+    go_on_CLLAITEXPLT = True
+    return go_on_CLLAITEXPLT,milkexpl_df['ID_LAITEXPL'].tolist(),milkexpl_df['NOINTEXPL'].tolist(),\
+        milkexpl_df['DATE_CTRL'].tolist(),milkexpl_df['TRAIT1'].tolist(),\
+        milkexpl_df['CD_TYPE_CTRL'].tolist(),milkexpl_df['DATE_RECEPT_ANALYSE'].tolist(),\
+        milkexpl_df['CD_ETAPE_CTRL'].tolist()
 
 
 
@@ -960,10 +1167,30 @@ if __name__ == "__main__":
                     if go_on_identanv:
 
     ##############################################################################################################
-    # 7.3 Generation et insertion des données CL_LAITEXPL/CL_LAITLACT/CL/LAITCTRL
+    # 7.3 Generating/fillinf datas tables  CL_LAITEXPL/CL_LAITLACT/CL/LAITCTRL
     ##############################################################################################################  
                         
-                        print("     7.3 - Insertion des données générées et regressées (CL_LAITLACT / CL_LAIT_EXPL / CL_LAIT_CTRL)") 
+                        print("     7.3 - Data generated (CL_LAITLACT / CL_LAIT_EXPL / CL_LAIT_CTRL)") 
+                        ##############################################################################################################
+                        # 7.3.1 Generating/filling data table CL_LAITEXPL
+                        ##############################################################################################################   
+                        
+                        print("         7.3.1 Table Generation CL_LAITEXPL")
+                        
+                        go_on_CLLAITEXPL,liste_ID_LAITEXPL,liste_NOINTEXPL,liste_DATE_CTRL,liste_TRAIT1,liste_CD_TYPE_CTRL,liste_DATE_RECEPT_ANALYSE,liste_CD_ETAPE_CTRL = Generate_CLLAITEXPL(src_conn,dst_conn)
+
+                        #FIlling DF
+                        df_CL_LAITEXPL_dst['ID_LAITEXPL'] = liste_ID_LAITEXPL
+                        df_CL_LAITEXPL_dst['NOINTEXPL'] = liste_NOINTEXPL
+                        df_CL_LAITEXPL_dst['DATE_CTRL'] = liste_DATE_CTRL
+                        df_CL_LAITEXPL_dst['TRAIT1'] = liste_TRAIT1
+                        df_CL_LAITEXPL_dst['CD_TYPE_CTRL'] = liste_CD_TYPE_CTRL
+                        df_CL_LAITEXPL_dst['DATE_RECEPT_ANALYSE'] = liste_DATE_RECEPT_ANALYSE
+                        df_CL_LAITEXPL_dst['CD_ETAPE_CTRL'] = liste_CD_ETAPE_CTRL
+                        df_CL_LAITEXPL_dst['CD_TYPE_CTRL'] = df_CL_LAITEXPL_dst['CD_TYPE_CTRL'].astype(int)
+
+                        df_CL_LAITEXPL_dst.to_sql("CL_LAITEXPL", dst_conn, if_exists="replace", index=False)#mettre a jour la BDD
+                        dst_conn.commit()
 
                     else:#Go_on_exploitation
                         dst_cur.execute("PRAGMA foreign_keys = ON;")
