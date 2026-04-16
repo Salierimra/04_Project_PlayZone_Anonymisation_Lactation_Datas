@@ -982,7 +982,621 @@ def Generate_CLLAITEXPL(src_conn,dst_conn):
         milkexpl_df['CD_TYPE_CTRL'].tolist(),milkexpl_df['DATE_RECEPT_ANALYSE'].tolist(),\
         milkexpl_df['CD_ETAPE_CTRL'].tolist()
 
+def recovery_nolact(src_cur):
+    
+    '''
+    Function recovering Number of lactation per cow and occurence proportion for each CP /ACTIEL (breed)
+    Creating a dataframe as:
+    CODPOST ACTIEL NB_LACT proportion
+    1301    04      1       0.42
+    1301    04      2       0.58
+    1325    01      1       0.5
+    1325    01      2       0.5
+    1325    04      1       0.33
+    1325    04      2       0.33
+    1325    04      3       0.33
 
+    Args : input cursor
+
+    return :
+    DF
+
+    '''
+                        
+    avg_per_actiel = src_cur.execute(
+        """
+                                
+        SELECT 
+            ex.CODPOST,
+            ia.ACTIEL,
+            ll.NOLACT AS Nb_LACT,
+            CAST(COUNT(*) AS FLOAT) / SUM(COUNT(*)) OVER (PARTITION BY ex.CODPOST, ia.ACTIEL) AS repartition_nb_lact
+        FROM 
+            IDENTANV ia 
+            JOIN CL_LAITLACT ll ON ll.NOAN = ia.NOAN 
+            JOIN EXPLOITATION ex ON ia.NOINTSANIT = ex.NOINTEXPL 
+        WHERE 
+            ex.NOINTEXPL != 111111
+        GROUP BY 
+            ex.CODPOST, 
+            ia.ACTIEL, 
+            ll.NOLACT
+        ORDER BY 
+            ex.CODPOST, 
+            ia.ACTIEL, 
+            ll.NOLACT               
+                                                                                                
+        """)
+                                                                                                        
+    fetch = avg_per_actiel.fetchall()
+                                                                                                       
+    df = pd.DataFrame(fetch, columns=['CODPOST','ACTIEL', 'Nb_lact','Repartition'])
+                                                                                                                        
+    return df#return df with 4 columns
+
+def sample_nb_lact(codpost, actiel, df_dist):
+
+    """
+    Function allowing to determinate the number of lactation for a cow taking into consideration input database proportion
+    Args:
+        Codpost to be considered (of the current cow)
+        Actiel to be considered (of the current cow) returning 
+        df_dist :
+                            #CP     ACTIEL      nb_lactation     proportion 
+                            #1001     04            2               0.4
+                            #1001     04            3               0.2
+                            #1001     04            4               0.4
+                            #1001     02            3               0.35
+                            #1001     02            4               0.35
+                            #1001     02            5               0.3
+                            #1002     10            6               0.35
+                            #1002     10            7               0.35
+                            #1002     10            8               0.3
+    """
+    # Filter DF with CP and Actiel
+    mask = (df_dist['CODPOST'] == codpost) & (df_dist['ACTIEL'] == actiel)
+    options = df_dist[mask]
+    
+    
+    if len(options) == 0: # if no match -> filter on ACTIEL only
+        mask = (df_dist['ACTIEL'] == actiel)
+        options = df_dist[mask]
+        if len(options) == 0: # if no match -> filter on CODPOST only
+            mask = (df_dist['CODPOST'] == codpost)
+            options = df_dist[mask]
+            if len(options) ==0 : #if no match -> return 1
+                return 1
+        
+    # returning Nb_lact with input dabase proportion taking into consideration
+    return np.random.choice(
+        options['Nb_lact'].values,
+        p=options['Repartition'].values / options['Repartition'].sum()  # Normalized
+    )
+
+def nombre_total_lactation(df_IDENTANV_JOIN_EXPL_dst):
+    '''
+    Function alolowing to count the total number of lactation for all cows in IDENTANV dest
+    Args :
+    df_IDENTANV_JOIN_EXPL
+    #Exemple :
+                            #NOAN       SEXEAN      DTNAISANINV     NOINTSANIT      ACTIEL      NOANPERE     NOANMERE   NOINTEXPL   CODPOST     Nblact
+                            #15994855      F            20210314       200139         04         99999493    99523596      200139     1001        4
+                            #15994856      F            20210314       200139         04         99999493    99523596      200139     1001        2
+    Return:
+        Integer count
+    '''
+    
+    Nb_LACT_total = sum(df_IDENTANV_JOIN_EXPL_dst['Nb_lact'])
+    
+    return Nb_LACT_total
+
+def generate_NOAN_NOLACT_CLLAITLACT(df_IDENTANV_JOIN_EXPL_dst):
+    '''
+    Function allowing to generate liste used to fill NOAN and NOLACT in the CL_LAITLACT table
+    args:
+        df_IDENTANV_JOIN_EXPL
+        #Exemple :
+                            #NOAN       SEXEAN      DTNAISANINV     NOINTSANIT      ACTIEL      NOANPERE     NOANMERE   NOINTEXPL   CODPOST     Nblact
+                            #15994855      F            20210314       200139         04         99999493    99523596      200139     1001        4
+                            #15994856      F            20210314       200139         04         99999493    99523596      200139     1001        2
+    How?
+    Read Nblact and insert N times the values 'number of the cow' in NOAN array and incremental count in NOLACT (1,2,3,4,....)
+    Return:
+        NOAN array : [15994855,15994855,15994855,15994855,15994856,15994856,...]
+        NOLACT array : [1,2,3,4,1,2,....]
+    '''
+    liste_NOAN = []
+    liste_NO_LACT =[]
+    for i in range(df_IDENTANV_JOIN_EXPL_dst.shape[0]): #for each cows
+        Noan = df_IDENTANV_JOIN_EXPL_dst['NOAN'][i] #recovering cow number
+        Nb_lact = df_IDENTANV_JOIN_EXPL_dst['Nb_lact'] # recovering nbLact column
+        for j in range (int(Nb_lact[i])):#loop for NbLact times for the considered cow
+            liste_NOAN.append(Noan)
+            liste_NO_LACT.append(j+1)
+    
+    return liste_NOAN,liste_NO_LACT
+
+def generate_index(nb,start,incr):
+    '''
+    Function allowing to generate an array by defining a start value, a step and a number of elem in inputs
+    '''
+    liste = []
+    liste.append(np.arange(start,start+nb,incr))
+    return liste
+
+def avg_duree_lactation_per_ACTIEL_per_CP_per_NO_LACT(src_cur):
+    '''
+    Function allowing to create a df regrouping each CP,ACTIEL and NoLACT + the vlue of avg lactation time + proportion
+     #return DF  for each CP, ACTIEL and NOLACT the lactation time and the proportion of occurence
+                            #EXEMPLE
+                            #CP     ACTIEL      NOLACT      avg(DATE_TAR - DATE_VEL) en mois     proportion
+                            #1001       04          1                   10                          0.1
+                            #1001       04          1                   11                          0.5
+                            #1001       04          1                   12                          0.4
+                            #1001       04          2                   10                          0.2
+                            #1001       04          2                   11                          0.2
+                            #1001       04          2                   12                          0.6
+                            #       ....
+    Args:
+        cursor towards input DB
+    return:
+        df
+    '''
+    
+    avg_dur_lact = src_cur.execute("""
+    
+    WITH calcul_diff AS (
+    SELECT 
+        CAST(ai.ACTIEL AS TEXT) AS ACTIEL,
+        ex.CODPOST,
+        cl.NOLACT AS No_LACT,
+        ia.DTNAISANINV,
+        DATE(SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 1, 4) || '-' || 
+             SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 5, 2) || '-' || 
+             SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 7, 2)) AS date_naissance,
+        cl.DATE_VEL,
+        cl.DATE_TAR,
+        CASE 
+            WHEN cl.NOLACT = 1 THEN 
+                CAST((JULIANDAY(cl.DATE_VEL) - JULIANDAY(DATE(SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 1, 4) || '-' || 
+                                                          SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 5, 2) || '-' || 
+                                                          SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 7, 2))))/30.44 AS INTEGER)
+            ELSE 
+                CAST((JULIANDAY(cl.DATE_VEL) - JULIANDAY(cl_prev.DATE_VEL))/30.44 AS INTEGER)
+        END AS diffe_2_lact_calc
+    FROM CL_LAITLACT cl
+    JOIN IDENTANV ia ON cl.NOAN = ia.NOAN
+    JOIN AIDACTIEL ai ON ai.ACTIEL = ia.ACTIEL
+    JOIN EXPLOITATION ex ON ia.NOINTSANIT = ex.NOINTEXPL
+    LEFT JOIN CL_LAITLACT cl_prev ON cl.NOAN = cl_prev.NOAN 
+                                   AND cl_prev.NOLACT = cl.NOLACT - 1
+    WHERE cl.DATE_TAR IS NOT NULL 
+      AND cl.DATE_VEL IS NOT NULL 
+      AND ia.NOINTSANIT != 111111
+)
+SELECT 
+    ACTIEL,
+    CODPOST,
+    No_LACT,
+    DTNAISANINV,
+    date_naissance,
+    DATE_VEL,
+    DATE_TAR,
+    COALESCE(
+        diffe_2_lact_calc,
+        CAST(AVG(diffe_2_lact_calc) OVER (PARTITION BY ACTIEL, CODPOST, No_LACT) AS INTEGER),
+        10
+    ) AS diffe_2_lact,
+    ROUND(
+        COUNT(*) * 1.0 / SUM(COUNT(*)) OVER (PARTITION BY ACTIEL, CODPOST, No_LACT), 
+        2
+    ) AS prop_dur_2_lact
+FROM calcul_diff
+GROUP BY ACTIEL, CODPOST, No_LACT, diffe_2_lact_calc
+ORDER BY ACTIEL, CODPOST, No_LACT, diffe_2_lact;
+    """)
+    # ACTIEL CODPOST NOLACT DTNAIS      Birthdate    DATE Vel   Date TAR    Count_Months_between_2VEL             Proportion
+#     01	  1495	   1	20210210	2021-02-10	2023-05-12	2024-10-10	            26	                         0.14
+    # 01	  1495	   1	20210220	2021-02-20	2023-10-02	2024-07-26	            31	                         0.14
+    # 01	  1495	   1	20210728	2021-07-28	2024-07-07	2024-11-21	            35	                         0.14
+    # 01	  1495	   1	20190205	2019-02-05	2022-03-23	2022-08-03	            37	                         0.14
+    # 01	  1495	   1	20180205	2018-02-05	2021-08-31	2022-06-20	            42	                         0.14
+    # 01	  1495	   1	20190310	2019-03-10	2022-12-26	2023-05-18	            45	                         0.14
+    # 01	  1495	   1	20190218	2019-02-18	2023-03-19	2023-10-31	            48	                         0.14
+    # 01	  1495	   2	20190218	2019-02-18	2024-03-09	2025-01-03	            11	                         0.2
+
+    
+    fetch = avg_dur_lact.fetchall()
+    
+    #genate DF
+    df = pd.DataFrame(fetch, columns=['ACTIEL','CODPOST','NOLACT','DNaissance','Date_Naissance','DATE_VEL','DATE_TAR','Diff_2_lact','prop_dur_2_lact'])
+    
+    return df
+
+def Fill_Date_Vel_Par_IDLACT(df_avg,df_tmp=None):
+    '''
+    Function allowing to fill DATE_VEL generated in output DF based on infos already output DB
+    ARgs:
+        df_avg :
+    #CP     ACTIEL      NOLACT      Count_Months_between_2VEL            proportion
+    #1001       04          1                   10                          0.1
+    #1001       04          1                   11                          0.5
+    #1001       04          1                   12                          0.4
+    #1001       04          2                   10                          0.2
+    #1001       04          2                   11                          0.2
+    #1001       04          2                   12                          0.6
+
+    return a tmp_df with filled DATE_VEL
+
+
+    '''
+    
+    # ============
+    # 1) Extraction SQL 
+    # ============
+    fetch = dst_cur.execute("""
+        select cl.ID_LAITLACT,cl.NOAN,cl.NOLACT, ia.ACTIEL,cl.DATE_VEL,cl.DATE_TAR,ex.CODPOST,
+        DATE(SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 1, 4) || '-' || 
+             SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 5, 2) || '-' || 
+             SUBSTR(CAST(ia.DTNAISANINV AS TEXT), 7, 2)) AS date_naissance
+        
+        from CL_LAITLACT cl
+        LEFT JOIN IDENTANV ia ON cl.NOAN = ia.NOAN
+        LEFT JOIN EXPLOITATION ex on ia.NOINTSANIT = ex.NOINTEXPL
+		ORDER by cl.NOAN,cl.NOLACT,ex.CODPOST,ia.ACTIEL;
+        
+    """).fetchall()
+    '''
+    fetch :
+    ID_LAITLACT NOAN      NOLACT  ACTIEL DATE VEL   Date_TAR    CODPOST birthdate
+    3506312	    12992314	1	    02	2018-11-03	2020-01-13	   0	2016-09-28
+    3603213	    12992314	2	    02	2020-03-17	2021-06-03	   0	2016-09-28
+    3705033	    12992314	3	    02	2021-07-18	2022-05-31	   0	2016-09-28
+    3814246	    12992314	4	    02	2022-07-08		           0	2016-09-28
+    3371284	    13232677	14	    02	2016-11-26	2019-05-10	   0	2000-09-08
+    '''
+    #CTmp DF creation (DATE_VEL and DATE_TAR are None at this moment)
+    df_tmp = pd.DataFrame(fetch, columns=[
+       'ID_LAITLACT','NOAN','NOLACT','ACTIEL','DATE_VEL','DATE_TAR','CODPOST','Date_naissance'
+    ])
+
+    df_tmp["Date_naissance"] = pd.to_datetime(df_tmp["Date_naissance"]) #cast as dt
+
+    df_avg = df_avg.copy()
+
+    # Probability normalisation
+    df_avg["prop_norm"] = df_avg.groupby(
+        ["ACTIEL", "CODPOST", "NOLACT"]
+    )["prop_dur_2_lact"].transform(lambda x: x / x.sum())
+
+    '''
+    print(df_avg.head(10))
+  ACTIEL  CODPOST  NOLACT  DNaissance Date_Naissance    DATE_VEL    DATE_TAR  Diff_2_lact  prop_dur_2_lact  prop_norm
+0     01     1495       1    20210210     2021-02-10  2023-05-12  2024-10-10           26             0.14   0.142857
+1     01     1495       1    20210220     2021-02-20  2023-10-02  2024-07-26           31             0.14   0.142857
+2     01     1495       1    20210728     2021-07-28  2024-07-07  2024-11-21           35             0.14   0.142857
+3     01     1495       1    20190205     2019-02-05  2022-03-23  2022-08-03           37             0.14   0.142857
+4     01     1495       1    20180205     2018-02-05  2021-08-31  2022-06-20           42             0.14   0.142857
+5     01     1495       1    20190310     2019-03-10  2022-12-26  2023-05-18           45             0.14   0.142857
+6     01     1495       1    20190218     2019-02-18  2023-03-19  2023-10-31           48             0.14   0.142857
+7     01     1495       2    20190218     2019-02-18  2024-03-09  2025-01-03           11             0.20   0.200000
+
+    '''
+    
+
+    lookup_dict = {}
+    
+    for (actiel, codpost, nolact), group in df_avg.groupby(["ACTIEL", "CODPOST", "NOLACT"]): # for each rows in the groupby 
+        #creating a key in the dict with valus : dict (durées : [],probs: [])
+        lookup_dict[(actiel, codpost, nolact)] = {
+            'durees': group["Diff_2_lact"].values,
+            'probs': group["prop_norm"].values
+        }
+        
+        '''
+        print(lookup_dict)
+        {
+        ('01', np.int64(1495), np.int64(1)): 
+            {'durees': array([26, 31, 35, 37, 42, 45, 48]), 
+            'probs': array([0.14285714, 0.14285714, 0.14285714, 0.14285714, 0.14285714,0.14285714, 0.14285714])}
+        ,
+        {...
+        }}
+        '''
+
+    
+    # Fallback for CP+ ACTIEL only
+    lookup_actiel_cp = {}
+    for (actiel, nolact), group in df_avg.groupby(["ACTIEL", "CODPOST"]):
+        lookup_actiel_cp[(actiel, nolact)] = {
+            'durees': group["Diff_2_lact"].values,
+            'probs': group["prop_norm"].fillna(0).values
+        }
+        # Normalize
+        total = lookup_actiel_cp[(actiel, nolact)]['probs'].sum()
+        if total > 0:
+            lookup_actiel_cp[(actiel, nolact)]['probs'] /= total
+    
+    # Fallback for ACTIEL only
+    lookup_actiel = {}
+    for actiel, group in df_avg.groupby("ACTIEL"):
+        lookup_actiel[actiel] = {
+            'durees': group["Diff_2_lact"].values,
+            'probs': group["prop_norm"].fillna(0).values
+        }
+        total = lookup_actiel[actiel]['probs'].sum()
+        if total > 0:
+            lookup_actiel[actiel]['probs'] /= total
+
+    # ============================
+    #  Determine time between 2 VEL for this cow
+    # ============================
+    def tirage_vectorise_par_groupe(group_df):
+        """Function allowing to determine time between 2 VEL with a proportion notion
+        args:
+            groupby DF by ACTIEL,CODPOST and NOLACT
+        return:
+        # if durees = [10, 20, 30] et len(group_df) = 5
+        #array([20, 10, 30, 10, 20])
+            """
+        if len(group_df) == 0:
+            return []
+        # F
+        row = group_df.iloc[0]
+        a, cp, nl = row["ACTIEL"], row["CODPOST"], row["NOLACT"]
+        
+        # Hiérarchie de fallback
+        if (a, cp, nl) in lookup_dict: #sur actiel,codpost et nolact
+            data = lookup_dict[(a, cp, nl)]
+        elif (a, cp) in lookup_actiel_cp:#sur actiel,codpost
+            data = lookup_actiel_cp[(a, cp)]
+        elif a in lookup_actiel: #sur actiel seul
+            data = lookup_actiel[a]
+        else:
+            # Fallback par défaut
+            data = {'durees': np.array([10]), 'probs': np.array([1.0])}
+        
+        durees = data['durees']
+        probs = data['probs']
+        
+        # Normalisation de sécurité
+        if probs.sum() == 0:
+            probs = np.ones(len(probs)) / len(probs)
+        else:
+            probs = probs / probs.sum()
+        
+        # return:
+        # if durees = [10, 20, 30] et len(group_df) = 5
+        #array([20, 10, 30, 10, 20])
+        return np.random.choice(durees, size=len(group_df), p=probs)
+
+    # Apply function by group 
+    df_tmp["duree_finale"] = df_tmp.groupby(["ACTIEL", "CODPOST", "NOLACT"], group_keys=False).apply(
+        lambda g: pd.Series(tirage_vectorise_par_groupe(g), index=g.index)
+    )
+    '''
+    print("df_tmp_bef_cumsum",df_tmp)
+                  ID_LAITLACT      NOAN     NOLACT ACTIEL DATE_VEL DATE_TAR  CODPOST Date_naissance  duree_finale
+    0               3531061     13683956       1     04     None     None     4700     2022-09-19            25
+    1               3531338     13688683       1     CM     None     None     4900     2019-02-10            23
+    2               3531331     13720330       1     40     None     None     4900     2021-03-09            13
+    3               3531414     13747621       1     02     None     None     5000     2021-12-05            12
+    4               3531067     13764917       1     04     None     None     4700     2022-03-20            27
+    ..           ...       ...     ...    ...      ...      ...      ...            ...           ...
+    583             3531070     19591507       1     04     None     None     4700     2021-12-16            27
+    584             3531071     19591507       2     04     None     None     4700     2021-12-16            12
+    585             3531072     19591507       3     04     None     None     4700     2021-12-16            12
+    586             3531073     19591507       4     04     None     None     4700     2021-12-16            12
+    587             3531074     19591507       5     04     None     None     4700     2021-12-16            12
+    '''
+    # cumsum for each cow
+    df_tmp = df_tmp.sort_values(["NOAN", "NOLACT"])
+    df_tmp["duree_cumulee"] = df_tmp.groupby("NOAN")["duree_finale"].cumsum()
+    '''
+    print("df_tmp_aft_cumsum",df_tmp)
+        ID_LAITLACT      NOAN       NOLACT ACTIEL DATE_VEL DATE_TAR  CODPOST Date_naissance  duree_finale  duree_cumulee
+0        3531061       13683956       1     04     None     None     4700     2022-09-19            25             25
+1        3531338       13688683       1     CM     None     None     4900     2019-02-10            23             23
+2        3531331       13720330       1     40     None     None     4900     2021-03-09            13             13
+3        3531414       13747621       1     02     None     None     5000     2021-12-05            12             12
+4        3531067       13764917       1     04     None     None     4700     2022-03-20            27             27
+..           ...       ...     ...    ...      ...      ...      ...            ...           ...            ...
+583      3531070       19591507       1     04     None     None     4700     2021-12-16            27             27
+584      3531071       19591507       2     04     None     None     4700     2021-12-16            12             39
+585      3531072       19591507       3     04     None     None     4700     2021-12-16            12             51
+586      3531073       19591507       4     04     None     None     4700     2021-12-16            12             63
+587      3531074       19591507       5     04     None     None     4700     2021-12-16            12             75
+
+    '''
+
+    # Calculate DATE VEL from Birth Date
+    df_tmp["DATE_VEL"] = df_tmp["Date_naissance"] + pd.to_timedelta(df_tmp["duree_cumulee"] * 30, unit="D")
+    '''
+    print("df_tmp_final",df_tmp)
+        ID_LAITLACT      NOAN       NOLACT ACTIEL   DATE_VEL DATE_TAR  CODPOST Date_naissance  duree_finale  duree_cumulee
+0        3531061        13683956       1     04 2024-10-08     None     4700     2022-09-19            25             25
+1        3531338        13688683       1     CM 2020-12-31     None     4900     2019-02-10            23             23
+2        3531331        13720330       1     40 2022-04-03     None     4900     2021-03-09            13             13
+3        3531414        13747621       1     02 2022-11-30     None     5000     2021-12-05            12             12
+4        3531067        13764917       1     04 2024-06-07     None     4700     2022-03-20            27             27
+..           ...       ...     ...    ...        ...      ...      ...            ...           ...            ...
+583      3531070        19591507       1     04 2024-03-05     None     4700     2021-12-16            27             27
+584      3531071        19591507       2     04 2025-02-28     None     4700     2021-12-16            12             39
+585      3531072        19591507       3     04 2026-02-23     None     4700     2021-12-16            12             51
+586      3531073        19591507       4     04 2027-02-18     None     4700     2021-12-16            12             63
+587      3531074        19591507       5     04 2028-02-13     None     4700     2021-12-16            12             75
+    '''
+    return df_tmp #retourne le DF avec DATE_VEL remplie
+
+def avg_duree_VEL_TAR_per_ACTIEL_per_CP_per_NO_LACT(src_cur):
+    '''
+    Function allowing to calculate the AVG duration between DATE VEL and DATE TAR by ACTIEL/CP/NOLACT
+    args :
+        input cursor toward input DB
+    Return:
+        DF as :
+    ID_LAITLACT     ACTIEL  CODPOST NOLACT  DATE_VEL    DATE_TAR    diff VEL_TAR(months)    Proportion
+    3949836	          01	1400	1	    2024-07-07	2024-11-21	4	                    0.43
+    3866075	          01	1400	1	    2023-03-19	2023-10-31	7	                    0.14
+    3777903	          01	1400	1	    2021-08-31	2022-06-20	9	                    0.29
+    3872479	          01	1400	1	    2023-05-12	2024-10-10	16	                    0.14
+    3872480	          01	1400	2	    2023-04-25	2023-10-31	6	                    0.2
+    3786666           01    1500    1                               1                       0.5
+    3786666           01    1500    1                               2                       0.5
+    ...
+    
+    '''
+    
+    
+    avg_dur_lact = src_cur.execute("""
+    WITH calcul_diff AS (
+    SELECT 
+        cl.ID_LAITLACT,
+        CAST(ai.ACTIEL AS TEXT) AS ACTIEL,
+        floor(ex.CODPOST/100)*100 as CODPOST,
+        cl.NOLACT AS No_LACT,
+        cl.DATE_VEL,
+        cl.DATE_TAR,
+		CAST((JULIANDAY(cl.DATE_TAR) - (JULIANDAY(cl.DATE_VEL)))/30.44 AS INTEGER) AS Diff_TAR_VEL
+    FROM CL_LAITLACT cl
+    JOIN IDENTANV ia ON cl.NOAN = ia.NOAN
+    JOIN AIDACTIEL ai ON ai.ACTIEL = ia.ACTIEL
+    JOIN EXPLOITATION ex ON ia.NOINTSANIT = ex.NOINTEXPL
+    WHERE cl.DATE_TAR IS NOT NULL 
+      AND cl.DATE_VEL IS NOT NULL 
+      AND ia.NOINTSANIT != 111111
+    )
+    SELECT 
+        ID_LAITLACT,
+        ACTIEL,
+        CODPOST,
+        No_LACT,
+        DATE_VEL,
+        DATE_TAR,
+        COALESCE(
+            Diff_TAR_VEL,
+            CAST(AVG(Diff_TAR_VEL) OVER (PARTITION BY ACTIEL, CODPOST, No_LACT) AS INTEGER)
+        ) AS diff_TAR_VEL,
+        ROUND(
+            COUNT(*) * 1.0 / SUM(COUNT(*)) OVER (PARTITION BY ACTIEL, CODPOST, No_LACT), 
+            2
+        ) AS prop_dur_TAR_VEL
+    FROM calcul_diff
+    GROUP BY ACTIEL, CODPOST, No_LACT, Diff_TAR_VEL
+    ORDER BY ACTIEL, CODPOST, No_LACT, Diff_TAR_VEL;   
+   
+    """)
+    
+    fetch = avg_dur_lact.fetchall()
+    
+    #genere un dataframe avec les données
+    df = pd.DataFrame(fetch, columns=['ID_LAITLACT','ACTIEL','CODPOST','NOLACT','DATE_VEL','DATE_TAR','Diff_TAR_VEL','prop_dur_TAR_VEL'])
+    
+    return df
+
+def Generate_DATE_TAR(df_avg, df_tmp):
+    """
+    Function allowing to determine DATE_TAR. It will :
+        pick a duration between DATE_VEL and DATE_TAR considering ACTIEL/CODPOST/NOLACT and proportion of occurence
+    Args:
+
+      - df_avg : DF with avg and proportion duration between VEL and TAR by ACTIEL / CODPOST / NOLACT
+      - df_tmp : DF containing cows from output DB with DATE VEL generated
+    Return :
+      - array with DATE_TAR generated
+      - df_tmp (modified with DATE_TAR generated included)
+    """
+    
+    df_avg = df_avg.copy()
+    
+    # Normalisation
+    df_avg["prop_norm"] = df_avg.groupby(
+        ["ACTIEL", "CODPOST", "NOLACT"]
+    )["prop_dur_TAR_VEL"].transform(lambda x: x / x.sum())
+
+    # Created dict
+    lookup_dict = {}
+    for (actiel, codpost, nolact), group in df_avg.groupby(["ACTIEL", "CODPOST", "NOLACT"]):
+        lookup_dict[(actiel, codpost, nolact)] = {
+            'durees': group["Diff_TAR_VEL"].values,
+            'probs': group["prop_norm"].values
+        }
+        '''
+        print(lookup_dict)
+        {
+        ('01', np.int64(1495), np.int64(1)): 
+            {'durees': array([26, 31, 35, 37, 42, 45, 48]), 
+            'probs': array([0.14285714, 0.14285714, 0.14285714, 0.14285714, 0.14285714,0.14285714, 0.14285714])}
+        ,
+        {...
+        }}
+        '''
+    
+    lookup_actiel_cp = {}
+    for (actiel, nolact), group in df_avg.groupby(["ACTIEL", "CODPOST"]):
+        lookup_actiel_cp[(actiel, nolact)] = {
+            'durees': group["Diff_TAR_VEL"].values,
+            'probs': group["prop_norm"].fillna(0).values
+        }
+        total = lookup_actiel_cp[(actiel, nolact)]['probs'].sum()
+        if total > 0:
+            lookup_actiel_cp[(actiel, nolact)]['probs'] /= total
+    
+    lookup_actiel = {}
+    for actiel, group in df_avg.groupby("ACTIEL"):
+        lookup_actiel[actiel] = {
+            'durees': group["Diff_TAR_VEL"].values,
+            'probs': group["prop_norm"].fillna(0).values
+        }
+        total = lookup_actiel[actiel]['probs'].sum()
+        if total > 0:
+            lookup_actiel[actiel]['probs'] /= total
+
+    def tirage_vectorise_par_groupe(group_df):
+        '''
+        Function defining the duration between DATE VEL and DATE TAR
+        args :
+        groupby input DB by CTIEL/CODPOST/NOLACT
+        return the value defined
+        '''
+        if len(group_df) == 0:
+            return []
+        
+        row = group_df.iloc[0]
+        a, cp, nl = row["ACTIEL"], row["CODPOST"], row["NOLACT"]
+        
+        if (a, cp, nl) in lookup_dict: #if match with ACTIEL, cp et NOLACT
+            data = lookup_dict[(a, cp, nl)] #return values/proportions
+        elif (a, nl) in lookup_actiel_cp:
+            data = lookup_actiel_cp[(a, nl)]
+        elif a in lookup_actiel:
+            data = lookup_actiel[a]
+        else:
+            data = {'durees': np.array([10]), 'probs': np.array([1.0])}
+        
+        durees = data['durees']
+        probs = data['probs']
+        
+        if probs.sum() == 0:
+            probs = np.ones(len(probs)) / len(probs)
+        else:
+            probs = probs / probs.sum() #normalize
+        
+        # Defining
+        tirages = np.random.choice(durees, size=len(group_df), p=probs)
+        # 2 months minimum between DATE_TAR previous and DATE VEL actual (client requests)
+        tirages = np.maximum(tirages, 2)
+        return tirages
+
+    df_tmp["duree_VELTAR"] = df_tmp.groupby(["ACTIEL", "CODPOST", "NOLACT"], group_keys=False).apply(
+        lambda g: pd.Series(tirage_vectorise_par_groupe(g), index=g.index)
+    )
+
+    df_tmp = df_tmp.sort_values(["NOAN", "NOLACT"])
+    df_tmp["duree_cumulee"] = df_tmp.groupby("NOAN")["duree_VELTAR"].cumsum()
+    df_tmp["DATE_TAR"] = df_tmp["DATE_VEL"] + pd.to_timedelta(df_tmp["duree_cumulee"] * 30, unit="D")
+
+    return df_tmp
 
 if __name__ == "__main__":
 
@@ -1192,6 +1806,215 @@ if __name__ == "__main__":
                         df_CL_LAITEXPL_dst.to_sql("CL_LAITEXPL", dst_conn, if_exists="replace", index=False)#mettre a jour la BDD
                         dst_conn.commit()
 
+                        ##############################################################################################################
+                        #7.3.2 Generating/ filling data table CL_LAILACT
+                        ##############################################################################################################  
+                        if go_on_CLLAITEXPL:
+                            
+                            print("         7.3.2 Table generation CL_LAITLACT")
+                            go_ON_CLLAITLACT = False
+                            
+                            #Create DF avec CP/ACTIEL/NOLACT/nb lact/ proportion
+                            #Exemple
+                            #CP     ACTIEL      nb_lactation     proportion 
+                            #1001     04            2               0.4
+                            #1001     04            3               0.2
+                            #1001     04            4               0.4
+                            #1001     02            3               0.35
+                            #1001     02            4               0.35
+                            #1001     02            5               0.3
+                            #1002     10            6               0.35
+                            #1002     10            7               0.35
+                            #1002     10            8               0.3
+
+                            df_avg_lact_per_CP_per_actiel = recovery_nolact(src_cur) #df (CP/ACTIEL/avg(nombre_lactation)/proportion)
+
+
+                            #Join between IDENTANV et EXPLOITATION in a df to have CODPOST for each cow in dst database and transform in 
+                            df_IDENTANV_JOIN_EXPL_dst = pd.read_sql('Select * from IDENTANV ia JOIN EXPLOITATION ex ON ia.NOINTSANIT = ex.NOINTEXPL',dst_conn)
+
+                            #Exemple :
+                            #NOAN       SEXEAN      DTNAISANINV     NOINTSANIT      ACTIEL      NOANPERE     NOANMERE   NOINTEXPL   CODPOST
+                            #15994855      F            20210314       200139         04         99999493    99523596      200139     1001        
+                            #15994856      F            20210314       200139         04         99999493    99523596      200139     1001        
+
+                            # CAST ACTIEL and CODPOST as str in both used df
+                            df_IDENTANV_JOIN_EXPL_dst['ACTIEL'] = df_IDENTANV_JOIN_EXPL_dst['ACTIEL'].astype(str).str.strip()
+                            df_IDENTANV_JOIN_EXPL_dst['CODPOST'] = df_IDENTANV_JOIN_EXPL_dst['CODPOST'].astype(str).str.strip()
+                            df_avg_lact_per_CP_per_actiel['ACTIEL'] = df_avg_lact_per_CP_per_actiel['ACTIEL'].astype(str).str.strip()
+                            df_avg_lact_per_CP_per_actiel['CODPOST'] = df_avg_lact_per_CP_per_actiel['CODPOST'].astype(str).str.strip()
+
+                            # Affect to each cows for identANV dest  a number of lactation by applying sample_nb_lact taking her CP and ACTIEL
+                            #Exemple :
+                            #NOAN       SEXEAN      DTNAISANINV     NOINTSANIT      ACTIEL      NOANPERE     NOANMERE   NOINTEXPL   CODPOST     Nblact
+                            #15994855      F            20210314       200139         04         99999493    99523596      200139     1001        4
+                            #15994856      F            20210314       200139         04         99999493    99523596      200139     1001        2
+
+                            df_IDENTANV_JOIN_EXPL_dst['Nb_lact'] = df_IDENTANV_JOIN_EXPL_dst.apply(
+                                lambda row: sample_nb_lact(
+                                    row['CODPOST'], 
+                                    row['ACTIEL'], 
+                                    df_avg_lact_per_CP_per_actiel
+                                ),
+                                axis=1
+                            )
+
+                            #Calculated total count of lactation
+                            Nb_LACT_total = nombre_total_lactation(df_IDENTANV_JOIN_EXPL_dst) #return a integer by counting nombre of lactation
+                            df_IDENTANV_JOIN_EXPL_dst['Nb_lact'] = df_IDENTANV_JOIN_EXPL_dst['Nb_lact'].astype(int)#cast int (security)
+
+                            #Index generation : array generatin starting at 3531047,step = 1 during Nb_LACT_total times
+                            #[3531047,3531048,3531049,...]
+                            liste_index = generate_index(Nb_LACT_total,3531047,1)
+
+                            #genere NOAN et CLLAITLACT 
+                            liste_NOAN_CLLAITLACT = generate_NOAN_NOLACT_CLLAITLACT(df_IDENTANV_JOIN_EXPL_dst) #retourne liste_NOAN et liste_NOLACT
+
+                            #Fill destination DF and CL_LAITLact table for output DB known columns
+                            df_CL_LAITLACT_dst["ID_LAITLACT"] = liste_index[0]
+                            df_CL_LAITLACT_dst["NOAN"] = liste_NOAN_CLLAITLACT[0]
+                            df_CL_LAITLACT_dst["NOLACT"] = liste_NOAN_CLLAITLACT[1]
+                            df_CL_LAITLACT_dst.to_sql("CL_LAITLACT", dst_conn, if_exists="replace", index=False) #fill output DB
+
+                            
+                            ##############################################################################################################
+                            # CL_LAITLACT -> DATE_VEL
+                            ############################################################################################################## 
+
+                            #return DF  for each CP, ACTIEL and NOLACT the lactation time and the proportion of occurence
+                            #EXEMPLE
+                            #CP     ACTIEL      NOLACT      avg(DATE between 2 VEL in months)     proportion
+                            #1001       04          1                   10                          0.1
+                            #1001       04          1                   11                          0.5
+                            #1001       04          1                   12                          0.4
+                            #1001       04          2                   10                          0.2
+                            #1001       04          2                   11                          0.2
+                            #1001       04          2                   12                          0.6
+                            #       ....
+    
+                            avg_duree_lact_per_ACTIELCPNOLACT = avg_duree_lactation_per_ACTIEL_per_CP_per_NO_LACT(src_cur)
+
+                            df_tmp = Fill_Date_Vel_Par_IDLACT(avg_duree_lact_per_ACTIELCPNOLACT) 
+
+                            '''
+                            print("df_tmp_final",df_tmp)
+        ID_LAITLACT      NOAN       NOLACT ACTIEL   DATE_VEL DATE_TAR  CODPOST Date_naissance  duree_finale  duree_cumulee
+0        3531061        13683956       1     04 2024-10-08     None     4700     2022-09-19            25             25
+1        3531338        13688683       1     CM 2020-12-31     None     4900     2019-02-10            23             23
+2        3531331        13720330       1     40 2022-04-03     None     4900     2021-03-09            13             13
+3        3531414        13747621       1     02 2022-11-30     None     5000     2021-12-05            12             12
+4        3531067        13764917       1     04 2024-06-07     None     4700     2022-03-20            27             27
+..           ...       ...     ...    ...        ...      ...      ...            ...           ...            ...
+583      3531070        19591507       1     04 2024-03-05     None     4700     2021-12-16            27             27
+584      3531071        19591507       2     04 2025-02-28     None     4700     2021-12-16            12             39
+585      3531072        19591507       3     04 2026-02-23     None     4700     2021-12-16            12             51
+586      3531073        19591507       4     04 2027-02-18     None     4700     2021-12-16            12             63
+587      3531074        19591507       5     04 2028-02-13     None     4700     2021-12-16            12             75
+                            '''
+
+                            df_CL_LAITLACT_dst = pd.read_sql("SELECT * FROM CL_LAITLACT ORDER BY ID_LAITLACT", dst_conn) #assure order consistency
+                            df_tmp.sort_values(by=["ID_LAITLACT"])#assure order consistency
+
+                            # Merge to allign by ID_LAITLACT
+                            df_CL_LAITLACT_dst = df_CL_LAITLACT_dst.merge(
+                            df_tmp[["ID_LAITLACT", "DATE_VEL"]], 
+                            on="ID_LAITLACT", 
+                            how="left",
+                            suffixes=("_old", "")
+                            )
+
+                            # Delete old column DATE_VEL_old(was empty)
+                            if "DATE_VEL_old" in df_CL_LAITLACT_dst.columns:
+                                df_CL_LAITLACT_dst = df_CL_LAITLACT_dst.drop(columns=["DATE_VEL_old"])
+
+                            # Save in output DB
+                            df_CL_LAITLACT_dst.to_sql("CL_LAITLACT", dst_conn, if_exists="replace", index=False)
+                            
+                            ##############################################################################################################
+                            # CL_LAITLACT -> DATE_TAR
+                            ############################################################################################################## 
+
+                            #retourne un DF avec pour chaque vache la durée entre DATE_VEL et DATE_TAR par CP et par race et par NO_LACT 
+                            #EXEMPLE
+                            
+                            avg_duree_VEL_TAR_per_ACTIELCPNOLACT = avg_duree_VEL_TAR_per_ACTIEL_per_CP_per_NO_LACT(src_cur)
+                            
+                            #Generate DATE_TAR from random choice duration between VEL and TAR and from DATE VEL Defined previously in output DB
+                            df_tmp2 = Generate_DATE_TAR(avg_duree_VEL_TAR_per_ACTIELCPNOLACT,df_tmp)
+
+                            df_tmp2 = df_tmp2.sort_values(by=["ID_LAITLACT"])
+                        
+                            # Merge
+                            df_CL_LAITLACT_dst = df_CL_LAITLACT_dst.merge(
+                                df_tmp2[["NOAN","NOLACT","DATE_TAR"]], 
+                                on=["NOAN", "NOLACT"], 
+                                how="left",
+                                suffixes=("_old", "")
+                            )
+
+                            # Delete old DATE_TAR if exist
+                            if "DATE_TAR_old" in df_CL_LAITLACT_dst.columns:
+                                df_CL_LAITLACT_dst = df_CL_LAITLACT_dst.drop(columns=["DATE_TAR_old"])
+
+                            # Reorganized columns order
+                            colonnes_debut = ["ID_LAITLACT", "NOAN", "NOLACT", "DATE_VEL", "DATE_TAR"]
+                            autres_colonnes = [col for col in df_CL_LAITLACT_dst.columns if col not in colonnes_debut]
+                            df_CL_LAITLACT_dst = df_CL_LAITLACT_dst[colonnes_debut + autres_colonnes]
+                            # Save in DB
+                            df_CL_LAITLACT_dst.to_sql("CL_LAITLACT", dst_conn, if_exists="replace", index=False)
+                            
+                            # Case when DATE_TAR(NOLACT = 1) > a DATE_VEL(NOLACT =2) -> bo sense -> assure 2 months between DATE_Tar N et DATE_VEL N-1
+                       
+
+                            dst_cur.execute("""
+                            UPDATE CL_LAITLACT
+                            SET DATE_TAR = (
+                                SELECT date(t2.DATE_VEL, '-2 months')
+                                FROM CL_LAITLACT t2
+                                WHERE t2.NOAN = CL_LAITLACT.NOAN 
+                                AND t2.NOLACT = CL_LAITLACT.NOLACT + 1
+                            )
+                            WHERE EXISTS (
+                                SELECT 1
+                                FROM CL_LAITLACT t2
+                                WHERE t2.NOAN = CL_LAITLACT.NOAN 
+                                AND t2.NOLACT = CL_LAITLACT.NOLACT + 1
+                                AND CL_LAITLACT.DATE_TAR >= t2.DATE_VEL
+                            );
+                            """)
+                            dst_conn.commit()
+
+                            #Date consistency
+                            dst_cur.execute("""
+                            UPDATE CL_LAITLACT
+                            SET DATE_VEL = DATE(DATE_VEL),
+                                DATE_TAR = DATE(DATE_TAR);
+                            """)
+                            dst_conn.commit()
+
+                            #delete lines where DATE VEL > today
+                            dst_cur.execute("""PRAGMA foreign_keys = OFF;""")
+                            dst_cur.execute("""
+                            DELETE FROM CL_LAITLACT
+                            WHERE DATE(DATE_VEL) >= DATE('now');
+                                            """)
+                            dst_conn.commit()
+
+                            # NULL if DATE_TAR > TODAY (ongoing lactation
+
+                            dst_cur.execute("""UPDATE CL_LAITLACT
+                            SET DATE_TAR = NULL
+                            WHERE DATE_TAR > DATE('now');""")
+                            dst_conn.commit()                            
+                            df_CL_LAITLACT_dst = pd.read_sql("select * from CL_LAITLACT",dst_conn)
+                            
+                            
+
+
+                        else:#go on cllaitexpl
+                            dst_cur.execute("PRAGMA foreign_keys = ON;")
+                            src_conn.close()
+                            dst_conn.close()
                     else:#Go_on_exploitation
                         dst_cur.execute("PRAGMA foreign_keys = ON;")
                         src_conn.close()
