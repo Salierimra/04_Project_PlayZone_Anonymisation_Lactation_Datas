@@ -1,0 +1,11 @@
+Woods : 
+
+y(t) = a · t^b · e^(−c·t) where y(4) means production à day 4 of veil
+
+What's influencing the parameter a,b,c ? (Client response)
+
+- Breed (ACTIEL)
+- NOLACT
+- Month of Veil
+- Veil duration
+- Genetics factors (+- 0.1 -> we'll neglect that)
