@@ -2008,7 +2008,75 @@ if __name__ == "__main__":
                             dst_conn.commit()                            
                             df_CL_LAITLACT_dst = pd.read_sql("select * from CL_LAITLACT",dst_conn)
                             
+                            ##############################################################################################################
+                            # CL_LAITLACT -> LAIT
+                            ############################################################################################################## 
+                            '''
+                            In order to calculate LAIT we need to answer the wood equation : y(t) = a · t^b · e^(−c·t) where y(4) means production à day 4 of veil
+                            so we'll need to define parameter a,b,c for EACH veil 
+                            To do that let's use regression model but to perform regression we'll need to determine a,b,c for each veil we had in input db
+                            In order to determine a 3 unknown equation, we need.... 3 equations 
+                            Exemple :
+                            y(3) : 40 = a* 3^b * e^(-c*3)
+                            y(4) : 50 = a* 4^b * e^(-c*4)
+                            y(5) : 60 = a* 5^b * e^(-c*5)
+                            gives
+                            a = 17,645 b = 0,6325 c= −0,0412
                             
+                            recovering usefull data from input DB
+                            a,b,c parameters depend on :
+                            - Breed (ACTIEL)
+                            - NOLACT
+                            - Month of Veil
+                            - Veil duration
+                            - Genetics factors (+- 0.1 -> we'll neglect that)
+                            '''
+                            
+                            src_cllaitlact_beforeLAIT = src_conn.execute(
+                                """
+                            select 
+                                cl.ID_LAITLACT,
+                                cl.NOAN,
+                                cl.NOLACT,
+                                ia.ACTIEL,
+                                cl.DATE_VEL,
+                                cl.DATE_TAR,
+                                cl.LAIT 
+                            from CL_LAITLACT cl
+                            JOIN IDENTANV ia on ia.NOAN = cl.NOAN
+                            where DATE_VEL is not NULL and DATE_TAR is not NULL
+
+                                """
+                            ).fetchall()
+
+                            df_CLLAITLACT_BEFORELAIT = pd.DataFrame(src_cllaitlact_beforeLAIT, columns=['ID_LAITLACT','NOAN','NOLACT','ACTIEL','DATE_VEL','DATE_TAR','LAIT'])
+                            ''' '''
+                            ''' DATE VEL is str at the moment let's recover month'''
+                            df_CLLAITLACT_BEFORELAIT['MonthVeil'] = pd.to_datetime(df_CLLAITLACT_BEFORELAIT['DATE_VEL']).dt.month
+                            '''Veil duration'''
+                            df_CLLAITLACT_BEFORELAIT['deltaMonthVelTar'] = round((pd.to_datetime(df_CLLAITLACT_BEFORELAIT['DATE_TAR']) - pd.to_datetime(df_CLLAITLACT_BEFORELAIT['DATE_VEL'])).dt.days,2)
+                            df_CLLAITLACT_BEFORELAIT.drop(['DATE_VEL','DATE_TAR','NOAN'],axis=1,inplace=True)
+
+                            ''' Now we need, for each ID_LAITLACT to determine a,b,c values 
+
+                            let's recover CLLAITCTRL'''
+
+                            src_CLLAITCTRL_BeforeLAIT = src_conn.execute(
+                            """
+                            select 
+                                lc.ID_LAITLACT,
+                                julianday(DATE(lc.HEURE_TRAIT1_DEB))-julianday(DATE(ll.DATE_VEL)) as Veil_duration,
+                                lc.LAIT_24_OBS
+                                
+                            from CL_LAITCTRL lc
+                            join CL_LAITLACT ll on lc.ID_LAITLACT = ll.ID_LAITLACT
+                            where lc.LAIT_24_OBS is not NULL
+
+                                """).fetchall()
+
+                            df_CLLAITCTRL_BEFORELAIT = pd.DataFrame(src_CLLAITCTRL_BeforeLAIT,columns=['ID_LAITLACT','Veil_Duration','LAIT_24_OBS'])
+
+                            '''iteration'''
 
 
                         else:#go on cllaitexpl
