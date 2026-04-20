@@ -1598,6 +1598,82 @@ def Generate_DATE_TAR(df_avg, df_tmp):
 
     return df_tmp
 
+def get_valid_sample(df_filtered, col_t='Veil_Duration', col_y='LAIT_24_OBS', n_tries=10):
+    """
+    Returns 3 valid points (t>0, y>0) with sufficiently different t values.
+    Retries sampling to avoid singular matrices (duplicate or too-close t values).
+    Falls back to default values if no valid combination found.
+    """
+    DEFAULT_T, DEFAULT_Y = 30, 20
+
+    valid_df = df_filtered[
+        (df_filtered[col_t] > 0) & (df_filtered[col_y] > 0)
+    ].reset_index(drop=True)
+    n_valid = len(valid_df)
+
+    if n_valid >= 3:
+        # Try multiple samples to avoid singular matrix (identical or too-close t values)
+        for _ in range(n_tries):
+            indices = random.sample(range(n_valid), 3)
+            t_vals = [valid_df.loc[i, col_t] for i in indices]
+            y_vals = [valid_df.loc[i, col_y] for i in indices]
+
+            # Check that t values are sufficiently different (avoid singular matrix)
+            t_sorted = sorted(t_vals)
+            if (t_sorted[1] - t_sorted[0] > 1) and (t_sorted[2] - t_sorted[1] > 1):
+                return {'t': t_vals, 'result': y_vals}
+
+        # Could not find a good combination, take first/middle/last valid points
+        step = n_valid // 2
+        indices = [0, step, n_valid - 1]
+        return {
+            't': [valid_df.loc[i, col_t] for i in indices],
+            'result': [valid_df.loc[i, col_y] for i in indices]
+        }
+
+    elif n_valid > 0:
+        # Fill missing points with defaults
+        dic_res = {
+            't': list(valid_df[col_t]),
+            'result': list(valid_df[col_y])
+        }
+        fill_t = [DEFAULT_T, DEFAULT_T * 2, DEFAULT_T * 3]
+        fill_y = [DEFAULT_Y, DEFAULT_Y * 1.2, DEFAULT_Y * 0.8]
+        idx = 0
+        while len(dic_res['t']) < 3:
+            dic_res['t'].append(fill_t[idx])
+            dic_res['result'].append(fill_y[idx])
+            idx += 1
+        return dic_res
+
+    else:
+        # No valid points at all
+        return {
+            't': [30, 60, 90],
+            'result': [DEFAULT_Y * 1.2, DEFAULT_Y, DEFAULT_Y * 0.8]
+        }
+
+
+def wood_from_3_points(t1, y1, t2, y2, t3, y3):
+    """
+    Calculate Wood parameters a, b, c from 3 points (t, y).
+    Uses log-linearization: ln(y) = ln(a) + b*ln(t) - c*t
+    """
+    M = np.array([
+        [1, np.log(t1), -t1],
+        [1, np.log(t2), -t2],
+        [1, np.log(t3), -t3]
+    ])
+    rhs = np.array([np.log(y1), np.log(y2), np.log(y3)])
+    ln_a, b, c = np.linalg.solve(M, rhs)
+
+    if abs(ln_a) > 10:  # a must stay between e^-10 and e^10 ~ [0.00005, 22026]
+        raise ValueError(f"ln_a out of range ({ln_a:.1f}), aberrant solution")
+
+    a = np.exp(ln_a)
+    return {'a': a, 'b': b, 'c': c}
+
+
 if __name__ == "__main__":
 
    ##############################################################################################################
@@ -2031,7 +2107,7 @@ if __name__ == "__main__":
                             - Veil duration
                             - Genetics factors (+- 0.1 -> we'll neglect that)
                             '''
-                            
+
                             src_cllaitlact_beforeLAIT = src_conn.execute(
                                 """
                             select 
@@ -2077,6 +2153,50 @@ if __name__ == "__main__":
                             df_CLLAITCTRL_BEFORELAIT = pd.DataFrame(src_CLLAITCTRL_BeforeLAIT,columns=['ID_LAITLACT','Veil_Duration','LAIT_24_OBS'])
 
                             '''iteration'''
+                            DEFAULT_A, DEFAULT_B, DEFAULT_C = 20, 0.25, 0.004
+
+                            array_a, array_b, array_c = [], [], []
+                            cpt=0
+                            for _, row in df_CLLAITLACT_BEFORELAIT.iterrows():
+                                id_lact = row['ID_LAITLACT']
+                                mask = (df_CLLAITCTRL_BEFORELAIT['ID_LAITLACT'] == id_lact)
+                                df_filtered = df_CLLAITCTRL_BEFORELAIT[mask].reset_index(drop=True)
+                                len_df = df_filtered.shape[0]
+
+                                a, b, c = DEFAULT_A+random.uniform(-0.1,0,1)*DEFAULT_A, DEFAULT_B+random.uniform(-0.1,0,1)*DEFAULT_B, DEFAULT_C+random.uniform(-0.1,0,1)*DEFAULT_C
+
+                                if len_df > 0:
+                                    dic_res = get_valid_sample(df_filtered)
+
+                                    try:
+                                        params = wood_from_3_points(
+                                            dic_res['t'][0], dic_res['result'][0],
+                                            dic_res['t'][1], dic_res['result'][1],
+                                            dic_res['t'][2], dic_res['result'][2]
+                                        )
+                                        a, b, c = params['a'], params['b'], params['c']
+
+                                    except (ValueError, np.linalg.LinAlgError) as e:
+                                        
+                                        cpt+=1
+
+                                array_a.append(round(a, 2))
+                                array_b.append(round(b, 2))
+                                array_c.append(round(c, 4))
+                            print("il y a eu ",str(cpt)," problemes")
+                            df_CLLAITLACT_BEFORELAIT['a'] = array_a
+                            df_CLLAITLACT_BEFORELAIT['b'] = array_b
+                            df_CLLAITLACT_BEFORELAIT['c'] = array_c
+
+                            '''
+                            ID_LAITLACT	NOLACT	ACTIEL	LAIT	MonthVeil deltaMonthVelTar	a	b	c
+                            3531047	      12	04	    93586.0	    3	       482	        20.0	0.25	0.004
+                            3643514	      13	04	    15348.0	    8	        71	        20.0	0.25	0.004
+                            3443481	      8	    02	    139447.0	12	       478	        20.0	0.25	0.004
+                            3426111	      8	    04	    121894.0	10	       493	        20.0	0.25	0.004
+                            3453384	      7	    04	    92697.0	    2	       388	        20.0	0.25	0.004
+                            '''
+                            #Calculate LAIT with a,b,c value and number of veil day
 
 
                         else:#go on cllaitexpl
