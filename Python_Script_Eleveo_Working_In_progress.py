@@ -2151,15 +2151,7 @@ if __name__ == "__main__":
                             gives
                             a = 17,645 b = 0,6325 c= −0,0412
                             
-                            recovering usefull data from input DB
-                            a,b,c parameters depend on :
-                            - Breed (ACTIEL)
-                            - NOLACT
-                            - Month of Veil
-                            - Veil duration
-                            - Genetics factors (+- 0.1 -> we'll neglect that)
-                            '''
-                            '''
+                            
                             recovering usefull data from input DB
                             a,b,c parameters depend on :
                             - Breed (ACTIEL)
@@ -2306,12 +2298,31 @@ if __name__ == "__main__":
                             mask = ((src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] < 1.15) & (src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] > 0.85)) | ((src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] < -0.85)& (src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] > -1.15))
                             src_df_CLLAITLACT_BEFORELAIT = src_df_CLLAITLACT_BEFORELAIT[mask]
 
-                            #starting ML to define a
-                            dummies = pd.get_dummies(src_df_CLLAITLACT_BEFORELAIT['ACTIEL'], prefix='ACTIEL', drop_first=True)
-                            src_df_CLLAITLACT_BEFORELAIT = pd.concat([src_df_CLLAITLACT_BEFORELAIT, dummies], axis=1)
-                            src_df_CLLAITLACT_BEFORELAIT.drop(columns=['ACTIEL'], inplace=True)
+                            #recovering CLLAITLACT output db
 
-                            X = np.array(src_df_CLLAITLACT_BEFORELAIT.iloc[:,1:8])#MAtrix
+                            dst_CLLAITLACT_BeforeLAIT = dst_conn.execute(
+                            """
+                            SELECT 
+                                cl.ID_LAITLACT,
+                                cl.NOLACT,
+                                julianday(COALESCE(DATE(cl.DATE_TAR), DATE('now'))) - julianday(DATE(cl.DATE_VEL)) AS Veil_Duration,
+                                CAST(strftime('%m', cl.DATE_VEL) AS INTEGER) AS Month_Veil,
+                                ia.ACTIEL
+                            FROM CL_LAITLACT cl
+                            JOIN IDENTANV ia on cl.NOAN = ia.NOAN
+
+                                """).fetchall()
+
+                            dst_df_CLLAITLACT_BeforeLAIT= pd.DataFrame(dst_CLLAITLACT_BeforeLAIT,columns=['ID_LAITLACT','NOLACT','MonthVeil','Veil_Duration','ACTIEL'])
+                            dummies = pd.get_dummies(dst_df_CLLAITLACT_BeforeLAIT['ACTIEL'], prefix='ACTIEL', drop_first=True)
+                            dst_df_CLLAITLACT_BeforeLAIT['ID_LAITLACT'].astype(int)
+                            dst_df_CLLAITLACT_BeforeLAIT = pd.concat([dst_df_CLLAITLACT_BeforeLAIT, dummies], axis=1)
+                            dst_df_CLLAITLACT_BeforeLAIT.drop(columns=['ACTIEL'], inplace=True)
+
+
+                            #definiing a
+
+                            X = np.array(src_df_CLLAITLACT_BEFORELAIT.drop(columns=['b','c','a','LAIT','LAIT Calcule','delta','porcentdelta','PIC','PERSISTANCE']))#MAtrix
                             y = np.array(src_df_CLLAITLACT_BEFORELAIT.loc[:,'a'])
 
                             X_train, X_test, y_train, y_test = train_test_split(X, y.T, test_size=0.2)
@@ -2321,7 +2332,35 @@ if __name__ == "__main__":
 
                             Model.fit(X_train,y_train)
 
-                            ####TODO model for b and c 
+
+
+                            ####TODO issue number of columns differs between src and dst...
+                            '''
+                            Source
+                            Index(['ID_LAITLACT', 'NOLACT', 'LAIT', 'PIC', 'PERSISTANCE', 'MonthVeil',
+                                'deltaMonthVelTar', 'a', 'b', 'c', 'LAIT Calcule', 'delta',
+                                'porcentdelta', 'ACTIEL_02', 'ACTIEL_03', 'ACTIEL_04', 'ACTIEL_05',
+                                'ACTIEL_07', 'ACTIEL_20', 'ACTIEL_22', 'ACTIEL_23', 'ACTIEL_27',
+                                'ACTIEL_28', 'ACTIEL_30', 'ACTIEL_31', 'ACTIEL_32', 'ACTIEL_40',
+                                'ACTIEL_50', 'ACTIEL_53', 'ACTIEL_82', 'ACTIEL_CL', 'ACTIEL_CM',
+                                'ACTIEL_CV', 'ACTIEL_XL', 'ACTIEL_XM', 'ACTIEL_XV', 'ACTIEL_XX'],
+                                dtype='object')
+                            destination
+                            Index(['ID_LAITLACT', 'NOLACT', 'LAIT', 'PIC', 'PERSISTANCE', 'MonthVeil',
+                                'deltaMonthVelTar', 'a', 'b', 'c', 'LAIT Calcule', 'delta',
+                                'porcentdelta', 'ACTIEL_02', 'ACTIEL_03', 'ACTIEL_04', 'ACTIEL_05',
+                                'ACTIEL_07', 'ACTIEL_20', 'ACTIEL_22', 'ACTIEL_23', 'ACTIEL_27',
+                                'ACTIEL_28', 'ACTIEL_30', 'ACTIEL_31', 'ACTIEL_32', 'ACTIEL_40',
+                                'ACTIEL_50', 'ACTIEL_53', 'ACTIEL_82', 'ACTIEL_CL', 'ACTIEL_CM',
+                                'ACTIEL_CV', 'ACTIEL_XL', 'ACTIEL_XM', 'ACTIEL_XV', 'ACTIEL_XX',
+                                'ACTIEL_02', 'ACTIEL_03', 'ACTIEL_04', 'ACTIEL_07', 'ACTIEL_22',
+                                'ACTIEL_27', 'ACTIEL_28', 'ACTIEL_40', 'ACTIEL_50', 'ACTIEL_CL',
+                                'ACTIEL_CM', 'ACTIEL_CV', 'ACTIEL_XL', 'ACTIEL_XM', 'ACTIEL_XV'],
+                                dtype='object')
+                            '''
+
+
+
 
                         else:#go on cllaitexpl
                             dst_cur.execute("PRAGMA foreign_keys = ON;")
