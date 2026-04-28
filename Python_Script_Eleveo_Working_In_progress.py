@@ -1690,6 +1690,8 @@ def wood_from_3_points(t1, y1, t2, y2, t3, y3):
         raise ValueError(f"c={c:.4f} hors plage")
     return {'a': a, 'b': b, 'c': c}
 
+
+
 def solve_c(t_pic, persistance):
     P = persistance / 100
     def equation(c):
@@ -1725,6 +1727,14 @@ def total_milk(row):
     total, _ = integrate.quad(lambda t: a * (t ** b) * np.exp(-c * t), 1, T)
     return round(total, 1)
 
+def recovering_all_actiel(conn):
+    all_actiel = conn.execute(
+        '''
+    select ACTIEL from AIDACTIEL
+        '''
+    ).fetchall()
+    return all_actiel
+    
 
 if __name__ == "__main__":
 
@@ -2217,7 +2227,7 @@ if __name__ == "__main__":
                             for _, row in src_df_CLLAITLACT_BEFORELAIT.iterrows():
                                 cpt1+=1
                                 if cpt1%100==0:
-                                    print (f'traitement {cpt1/100} / {src_df_CLLAITLACT_BEFORELAIT.shape[0]/100}')
+                                    print (f'Dealing preparing for ML defining a,b,c {cpt1/100} / {src_df_CLLAITLACT_BEFORELAIT.shape[0]/100}')
                                 id_lact = row['ID_LAITLACT']
                                 y_pic = row['PIC']
                                 persistance = row['PERSISTANCE']
@@ -2286,7 +2296,7 @@ if __name__ == "__main__":
                             src_df_CLLAITLACT_BEFORELAIT['b'] = array_b
                             src_df_CLLAITLACT_BEFORELAIT['c'] = array_c
 
-                            #keeping accurate values +/- 15% of real value with calculated a,b,c
+
                             mask = src_df_CLLAITLACT_BEFORELAIT['deltaMonthVelTar'] <= 10
                             src_df_CLLAITLACT_BEFORELAIT = src_df_CLLAITLACT_BEFORELAIT[~mask]
 
@@ -2294,33 +2304,36 @@ if __name__ == "__main__":
 
                             src_df_CLLAITLACT_BEFORELAIT['delta'] = src_df_CLLAITLACT_BEFORELAIT['LAIT Calcule']-src_df_CLLAITLACT_BEFORELAIT['LAIT']
                             src_df_CLLAITLACT_BEFORELAIT['porcentdelta']= round(src_df_CLLAITLACT_BEFORELAIT['LAIT'] / src_df_CLLAITLACT_BEFORELAIT['LAIT Calcule'],2)
-
+                            #keeping accurate values +/- 15% of real value with calculated a,b,c
                             mask = ((src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] < 1.15) & (src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] > 0.85)) | ((src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] < -0.85)& (src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] > -1.15))
                             src_df_CLLAITLACT_BEFORELAIT = src_df_CLLAITLACT_BEFORELAIT[mask]
 
-                            #recovering CLLAITLACT output db
+                            #get dummies on ACTIEL
+                            t= src_df_CLLAITLACT_BEFORELAIT.columns
 
-                            dst_CLLAITLACT_BeforeLAIT = dst_conn.execute(
-                            """
-                            SELECT 
-                                cl.ID_LAITLACT,
-                                cl.NOLACT,
-                                julianday(COALESCE(DATE(cl.DATE_TAR), DATE('now'))) - julianday(DATE(cl.DATE_VEL)) AS Veil_Duration,
-                                CAST(strftime('%m', cl.DATE_VEL) AS INTEGER) AS Month_Veil,
-                                ia.ACTIEL
-                            FROM CL_LAITLACT cl
-                            JOIN IDENTANV ia on cl.NOAN = ia.NOAN
-
-                                """).fetchall()
-
-                            dst_df_CLLAITLACT_BeforeLAIT= pd.DataFrame(dst_CLLAITLACT_BeforeLAIT,columns=['ID_LAITLACT','NOLACT','MonthVeil','Veil_Duration','ACTIEL'])
-                            dummies = pd.get_dummies(dst_df_CLLAITLACT_BeforeLAIT['ACTIEL'], prefix='ACTIEL', drop_first=True)
-                            dst_df_CLLAITLACT_BeforeLAIT['ID_LAITLACT'].astype(int)
-                            dst_df_CLLAITLACT_BeforeLAIT = pd.concat([dst_df_CLLAITLACT_BeforeLAIT, dummies], axis=1)
-                            dst_df_CLLAITLACT_BeforeLAIT.drop(columns=['ACTIEL'], inplace=True)
+                            dummies = pd.get_dummies(src_df_CLLAITLACT_BEFORELAIT['ACTIEL'], prefix='ACTIEL', drop_first=True)
+                            src_df_CLLAITLACT_BEFORELAIT['ID_LAITLACT'].astype(int)
+                            src_df_CLLAITLACT_BEFORELAIT = pd.concat([src_df_CLLAITLACT_BEFORELAIT, dummies], axis=1)
+                            src_df_CLLAITLACT_BEFORELAIT.drop(columns=['ACTIEL'], inplace=True)
 
 
-                            #definiing a
+                            # issue number of columns differs between src and dst... recovering all actiel
+                            raa=recovering_all_actiel(dst_conn)
+                            all_actiel= [raa[i][0] for i in range (len(raa))]
+                            all_actiel_order = ['ACTIEL_'+e for e in all_actiel]
+                            t= src_df_CLLAITLACT_BEFORELAIT.columns
+                            #checking if all columns are in the dataframe
+                            for e in all_actiel:
+                                if 'ACTIEL_'+e not in t:
+                                    src_df_CLLAITLACT_BEFORELAIT['ACTIEL_'+e] = False
+
+                            col13=src_df_CLLAITLACT_BEFORELAIT.columns[:13]
+                            order_col = pd.Index(list(col13) + list(all_actiel_order))
+
+                            src_df_CLLAITLACT_BEFORELAIT= src_df_CLLAITLACT_BEFORELAIT[order_col]
+
+
+                            #######################################################definiing a##################################################################################
 
                             X = np.array(src_df_CLLAITLACT_BEFORELAIT.drop(columns=['b','c','a','LAIT','LAIT Calcule','delta','porcentdelta','PIC','PERSISTANCE']))#MAtrix
                             y = np.array(src_df_CLLAITLACT_BEFORELAIT.loc[:,'a'])
@@ -2333,32 +2346,47 @@ if __name__ == "__main__":
                             Model.fit(X_train,y_train)
 
 
+                            #recovering CLLAITLACT output db
 
-                            ####TODO issue number of columns differs between src and dst...
-                            '''
-                            Source
-                            Index(['ID_LAITLACT', 'NOLACT', 'LAIT', 'PIC', 'PERSISTANCE', 'MonthVeil',
-                                'deltaMonthVelTar', 'a', 'b', 'c', 'LAIT Calcule', 'delta',
-                                'porcentdelta', 'ACTIEL_02', 'ACTIEL_03', 'ACTIEL_04', 'ACTIEL_05',
-                                'ACTIEL_07', 'ACTIEL_20', 'ACTIEL_22', 'ACTIEL_23', 'ACTIEL_27',
-                                'ACTIEL_28', 'ACTIEL_30', 'ACTIEL_31', 'ACTIEL_32', 'ACTIEL_40',
-                                'ACTIEL_50', 'ACTIEL_53', 'ACTIEL_82', 'ACTIEL_CL', 'ACTIEL_CM',
-                                'ACTIEL_CV', 'ACTIEL_XL', 'ACTIEL_XM', 'ACTIEL_XV', 'ACTIEL_XX'],
-                                dtype='object')
-                            destination
-                            Index(['ID_LAITLACT', 'NOLACT', 'LAIT', 'PIC', 'PERSISTANCE', 'MonthVeil',
-                                'deltaMonthVelTar', 'a', 'b', 'c', 'LAIT Calcule', 'delta',
-                                'porcentdelta', 'ACTIEL_02', 'ACTIEL_03', 'ACTIEL_04', 'ACTIEL_05',
-                                'ACTIEL_07', 'ACTIEL_20', 'ACTIEL_22', 'ACTIEL_23', 'ACTIEL_27',
-                                'ACTIEL_28', 'ACTIEL_30', 'ACTIEL_31', 'ACTIEL_32', 'ACTIEL_40',
-                                'ACTIEL_50', 'ACTIEL_53', 'ACTIEL_82', 'ACTIEL_CL', 'ACTIEL_CM',
-                                'ACTIEL_CV', 'ACTIEL_XL', 'ACTIEL_XM', 'ACTIEL_XV', 'ACTIEL_XX',
-                                'ACTIEL_02', 'ACTIEL_03', 'ACTIEL_04', 'ACTIEL_07', 'ACTIEL_22',
-                                'ACTIEL_27', 'ACTIEL_28', 'ACTIEL_40', 'ACTIEL_50', 'ACTIEL_CL',
-                                'ACTIEL_CM', 'ACTIEL_CV', 'ACTIEL_XL', 'ACTIEL_XM', 'ACTIEL_XV'],
-                                dtype='object')
-                            '''
+                            dst_CLLAITLACT_BeforeLAIT = dst_conn.execute(
+                            """
+                            SELECT 
+                                cl.ID_LAITLACT,
+                                cl.NOLACT,
+                                CAST(strftime('%m', cl.DATE_VEL) AS INTEGER) AS Month_Veil,
+                                julianday(COALESCE(DATE(cl.DATE_TAR), DATE('now'))) - julianday(DATE(cl.DATE_VEL)) AS Veil_Duration,
+                                ia.ACTIEL
+                            FROM CL_LAITLACT cl
+                            JOIN IDENTANV ia on cl.NOAN = ia.NOAN
 
+                                """).fetchall()
+
+                            dst_df_CLLAITLACT_BeforeLAIT= pd.DataFrame(dst_CLLAITLACT_BeforeLAIT,columns=['ID_LAITLACT','NOLACT','Month_Veil','Veil_Duration','ACTIEL'])
+                            dummies = pd.get_dummies(dst_df_CLLAITLACT_BeforeLAIT['ACTIEL'], prefix='ACTIEL', drop_first=True)
+                            dst_df_CLLAITLACT_BeforeLAIT['ID_LAITLACT'].astype(int)
+                            dst_df_CLLAITLACT_BeforeLAIT = pd.concat([dst_df_CLLAITLACT_BeforeLAIT, dummies], axis=1)
+
+                            q = dst_df_CLLAITLACT_BeforeLAIT.columns
+
+
+                            for e in all_actiel:
+                                if 'ACTIEL_'+e not in q:
+                                    dst_df_CLLAITLACT_BeforeLAIT['ACTIEL_'+e] = False
+
+                            dst_df_CLLAITLACT_BeforeLAIT=dst_df_CLLAITLACT_BeforeLAIT.drop('ACTIEL',axis=1)
+                            col4=dst_df_CLLAITLACT_BeforeLAIT.columns[:4]
+                            order_col_dst = pd.Index(list(col4) + list(all_actiel_order))
+
+                            dst_df_CLLAITLACT_BeforeLAIT= dst_df_CLLAITLACT_BeforeLAIT[order_col_dst]
+
+                            dst_df_CLLAITLACT_BeforeLAIT['a'] = Model.predict(dst_df_CLLAITLACT_BeforeLAIT)
+
+                            #######################################################definiing B##################################################################################
+
+
+                            print("finish")
+
+                            
 
 
 
