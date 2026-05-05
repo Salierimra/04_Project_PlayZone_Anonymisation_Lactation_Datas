@@ -25,7 +25,7 @@ install_packages(required_packages)
 import os
 import sqlite3
 from sqlite3 import IntegrityError
-
+import math
 import time
 import pandas as pd
 from pathlib import Path
@@ -46,6 +46,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import train_test_split,GridSearchCV
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
 
 def Deleting_output_DB(path_db):
     
@@ -2160,229 +2162,9 @@ if __name__ == "__main__":
                             y(5) : 60 = a* 5^b * e^(-c*5)
                             gives
                             a = 17,645 b = 0,6325 c= −0,0412
+                            '''
                             
                             
-                            recovering usefull data from input DB
-                            a,b,c parameters depend on :
-                            - Breed (ACTIEL)
-                            - NOLACT
-                            - Month of Veil
-                            - Veil duration
-                            - Genetics factors (+- 0.1 -> we'll neglect that)
-                            '''
-                            src_cllaitlact_beforeLAIT = src_conn.execute(
-                                """
-                            select 
-                                cl.ID_LAITLACT,
-                                cl.NOAN,
-                                cl.NOLACT,
-                                ia.ACTIEL,
-                                cl.DATE_VEL,
-                                cl.DATE_TAR,
-                                cl.LAIT,
-                                cl.PIC,
-                                cl.PERSISTANCE
-                            from CL_LAITLACT cl
-                            JOIN IDENTANV ia on ia.NOAN = cl.NOAN
-                            where DATE_VEL is not NULL and DATE_TAR is not NULL
-
-                                """
-                            ).fetchall()
-
-                            src_df_CLLAITLACT_BEFORELAIT = pd.DataFrame(src_cllaitlact_beforeLAIT, columns=['ID_LAITLACT','NOAN','NOLACT','ACTIEL','DATE_VEL','DATE_TAR','LAIT','PIC','PERSISTANCE'])
-                            ''' '''
-                            ''' DATE VEL is str at the moment let's recover month'''
-                            src_df_CLLAITLACT_BEFORELAIT['MonthVeil'] = pd.to_datetime(src_df_CLLAITLACT_BEFORELAIT['DATE_VEL']).dt.month
-                            '''Veil duration'''
-                            src_df_CLLAITLACT_BEFORELAIT['deltaMonthVelTar'] = round((pd.to_datetime(src_df_CLLAITLACT_BEFORELAIT['DATE_TAR']) - pd.to_datetime(src_df_CLLAITLACT_BEFORELAIT['DATE_VEL'])).dt.days,2)
-                            src_df_CLLAITLACT_BEFORELAIT.drop(['DATE_VEL','DATE_TAR','NOAN'],axis=1,inplace=True)
-
-                            ''' Now we need, for each ID_LAITLACT to determine a,b,c values 
-                            '''
-
-                            src_CLLAITCTRL_BeforeLAIT = src_conn.execute(
-                            """
-                            select 
-                                lc.ID_LAITLACT,
-                                julianday(DATE(lc.HEURE_TRAIT1_DEB))-julianday(DATE(ll.DATE_VEL)) as Veil_duration,
-                                lc.LAIT_24_OBS
-                                
-                            from CL_LAITCTRL lc
-                            join CL_LAITLACT ll on lc.ID_LAITLACT = ll.ID_LAITLACT
-                            where lc.LAIT_24_OBS is not NULL
-
-                                """).fetchall()
-
-                            src_df_CLLAITCTRL_BEFORELAIT = pd.DataFrame(src_CLLAITCTRL_BeforeLAIT,columns=['ID_LAITLACT','Veil_Duration','LAIT_24_OBS'])
-
-                            '''iteration'''
-
-                            DEFAULT_A, DEFAULT_B, DEFAULT_C = 300, 0.25, 0.004
-
-                            array_a, array_b, array_c = [], [], []
-                            cpt_default = 0
-                            cpt_pic = 0
-                            cpt_wood = 0
-                            cpt1=0
-                            for _, row in src_df_CLLAITLACT_BEFORELAIT.iterrows():
-                                cpt1+=1
-                                if cpt1%100==0:
-                                    print (f'Dealing preparing for ML defining a,b,c {cpt1/100} / {src_df_CLLAITLACT_BEFORELAIT.shape[0]/100}')
-                                id_lact = row['ID_LAITLACT']
-                                y_pic = row['PIC']
-                                persistance = row['PERSISTANCE']
-
-                                mask = (src_df_CLLAITCTRL_BEFORELAIT['ID_LAITLACT'] == id_lact)
-                                df_filtered = src_df_CLLAITCTRL_BEFORELAIT[mask].reset_index(drop=True)
-
-                                # defaults +/- 10%
-                                a = DEFAULT_A + random.uniform(-0.1, 0.1) * DEFAULT_A
-                                b = DEFAULT_B + random.uniform(-0.1, 0.1) * DEFAULT_B
-                                c = DEFAULT_C + random.uniform(-0.1, 0.1) * DEFAULT_C
-
-                                valid_df = df_filtered[
-                                    (df_filtered['Veil_Duration'] > 0) & (df_filtered['LAIT_24_OBS'] > 0)
-                                ].reset_index(drop=True)
-
-                                # Find max value and t associated
-                                t_pic = None
-                                if len(valid_df) > 0:
-                                    idx_peak = valid_df['LAIT_24_OBS'].idxmax()
-                                    t_pic = valid_df.loc[idx_peak, 'Veil_Duration']
-
-                                # Strat 1 : PIC + PERSISTANCE + t_pic estimé
-                                if t_pic is not None and y_pic > 0 and persistance > 0:
-                                    try:
-                                        params = wood_from_pic_persistance(t_pic, y_pic, persistance)
-                                        a, b, c = params['a'], params['b'], params['c']
-                                        cpt_pic += 1
-                                    except (ValueError, np.linalg.LinAlgError):
-                                        # Strat 2 : 3 points 
-                                        try:
-                                            dic_res = get_valid_sample(df_filtered)
-                                            params = wood_from_3_points(
-                                                dic_res['t'][0], dic_res['result'][0],
-                                                dic_res['t'][1], dic_res['result'][1],
-                                                dic_res['t'][2], dic_res['result'][2]
-                                            )
-                                            a, b, c = params['a'], params['b'], params['c']
-                                            cpt_wood += 1
-                                        except (ValueError, np.linalg.LinAlgError):
-                                            cpt_default += 1  # fallback valeurs par défaut
-
-                                else:
-                                    # no PIC/PERSISTANCE → strat 3 points direct
-                                    try:
-                                        dic_res = get_valid_sample(df_filtered)
-                                        params = wood_from_3_points(
-                                            dic_res['t'][0], dic_res['result'][0],
-                                            dic_res['t'][1], dic_res['result'][1],
-                                            dic_res['t'][2], dic_res['result'][2]
-                                        )
-                                        a, b, c = params['a'], params['b'], params['c']
-                                        cpt_wood += 1
-                                    except (ValueError, np.linalg.LinAlgError):
-                                        cpt_default += 1
-
-                                array_a.append(round(a, 2))
-                                array_b.append(round(b, 2))
-                                array_c.append(round(c, 4))
-
-                            print(f"Stratégie PIC+PERSISTANCE : {cpt_pic}")
-                            print(f"Stratégie 3 points        : {cpt_wood}")
-                            print(f"Fallback défauts          : {cpt_default}")
-
-                            src_df_CLLAITLACT_BEFORELAIT['a'] = array_a
-                            src_df_CLLAITLACT_BEFORELAIT['b'] = array_b
-                            src_df_CLLAITLACT_BEFORELAIT['c'] = array_c
-
-
-                            mask = src_df_CLLAITLACT_BEFORELAIT['deltaMonthVelTar'] <= 10
-                            src_df_CLLAITLACT_BEFORELAIT = src_df_CLLAITLACT_BEFORELAIT[~mask]
-
-                            src_df_CLLAITLACT_BEFORELAIT['LAIT Calcule'] = src_df_CLLAITLACT_BEFORELAIT.apply(total_milk,axis=1)
-
-                            src_df_CLLAITLACT_BEFORELAIT['delta'] = src_df_CLLAITLACT_BEFORELAIT['LAIT Calcule']-src_df_CLLAITLACT_BEFORELAIT['LAIT']
-                            src_df_CLLAITLACT_BEFORELAIT['porcentdelta']= round(src_df_CLLAITLACT_BEFORELAIT['LAIT'] / src_df_CLLAITLACT_BEFORELAIT['LAIT Calcule'],2)
-                            #keeping accurate values +/- 15% of real value with calculated a,b,c
-                            mask = ((src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] < 1.15) & (src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] > 0.85)) | ((src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] < -0.85)& (src_df_CLLAITLACT_BEFORELAIT['porcentdelta'] > -1.15))
-                            src_df_CLLAITLACT_BEFORELAIT = src_df_CLLAITLACT_BEFORELAIT[mask]
-
-                            #get dummies on ACTIEL
-                            t= src_df_CLLAITLACT_BEFORELAIT.columns
-
-                            dummies = pd.get_dummies(src_df_CLLAITLACT_BEFORELAIT['ACTIEL'], prefix='ACTIEL', drop_first=True)
-                            src_df_CLLAITLACT_BEFORELAIT['ID_LAITLACT'].astype(int)
-                            src_df_CLLAITLACT_BEFORELAIT = pd.concat([src_df_CLLAITLACT_BEFORELAIT, dummies], axis=1)
-                            src_df_CLLAITLACT_BEFORELAIT.drop(columns=['ACTIEL'], inplace=True)
-
-
-                            # issue number of columns differs between src and dst... recovering all actiel
-                            raa=recovering_all_actiel(dst_conn)
-                            all_actiel= [raa[i][0] for i in range (len(raa))]
-                            all_actiel_order = ['ACTIEL_'+e for e in all_actiel]
-                            t= src_df_CLLAITLACT_BEFORELAIT.columns
-                            #checking if all columns are in the dataframe
-                            for e in all_actiel:
-                                if 'ACTIEL_'+e not in t:
-                                    src_df_CLLAITLACT_BEFORELAIT['ACTIEL_'+e] = False
-
-                            col13=src_df_CLLAITLACT_BEFORELAIT.columns[:13]
-                            order_col = pd.Index(list(col13) + list(all_actiel_order))
-
-                            src_df_CLLAITLACT_BEFORELAIT= src_df_CLLAITLACT_BEFORELAIT[order_col]
-
-
-                            #######################################################definiing a##################################################################################
-
-                            X = np.array(src_df_CLLAITLACT_BEFORELAIT.drop(columns=['b','c','a','LAIT','LAIT Calcule','delta','porcentdelta','PIC','PERSISTANCE']))#MAtrix
-                            y = np.array(src_df_CLLAITLACT_BEFORELAIT.loc[:,'a'])
-
-                            X_train, X_test, y_train, y_test = train_test_split(X, y.T, test_size=0.2)
-
-                            Model = make_pipeline(PolynomialFeatures(degree=1,include_bias=True),
-                                                        LinearRegression(fit_intercept=False))
-
-                            Model.fit(X_train,y_train)
-
-
-                            #recovering CLLAITLACT output db
-
-                            dst_CLLAITLACT_BeforeLAIT = dst_conn.execute(
-                            """
-                            SELECT 
-                                cl.ID_LAITLACT,
-                                cl.NOLACT,
-                                CAST(strftime('%m', cl.DATE_VEL) AS INTEGER) AS Month_Veil,
-                                julianday(COALESCE(DATE(cl.DATE_TAR), DATE('now'))) - julianday(DATE(cl.DATE_VEL)) AS Veil_Duration,
-                                ia.ACTIEL
-                            FROM CL_LAITLACT cl
-                            JOIN IDENTANV ia on cl.NOAN = ia.NOAN
-
-                                """).fetchall()
-
-                            dst_df_CLLAITLACT_BeforeLAIT= pd.DataFrame(dst_CLLAITLACT_BeforeLAIT,columns=['ID_LAITLACT','NOLACT','Month_Veil','Veil_Duration','ACTIEL'])
-                            dummies = pd.get_dummies(dst_df_CLLAITLACT_BeforeLAIT['ACTIEL'], prefix='ACTIEL', drop_first=True)
-                            dst_df_CLLAITLACT_BeforeLAIT['ID_LAITLACT'].astype(int)
-                            dst_df_CLLAITLACT_BeforeLAIT = pd.concat([dst_df_CLLAITLACT_BeforeLAIT, dummies], axis=1)
-
-                            q = dst_df_CLLAITLACT_BeforeLAIT.columns
-
-
-                            for e in all_actiel:
-                                if 'ACTIEL_'+e not in q:
-                                    dst_df_CLLAITLACT_BeforeLAIT['ACTIEL_'+e] = False
-
-                            dst_df_CLLAITLACT_BeforeLAIT=dst_df_CLLAITLACT_BeforeLAIT.drop('ACTIEL',axis=1)
-                            col4=dst_df_CLLAITLACT_BeforeLAIT.columns[:4]
-                            order_col_dst = pd.Index(list(col4) + list(all_actiel_order))
-
-                            dst_df_CLLAITLACT_BeforeLAIT= dst_df_CLLAITLACT_BeforeLAIT[order_col_dst]
-
-                            dst_df_CLLAITLACT_BeforeLAIT['a'] = Model.predict(dst_df_CLLAITLACT_BeforeLAIT)
-
-                            #######################################################definiing B##################################################################################
-
 
                             print("finish")
 
