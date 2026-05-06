@@ -24,8 +24,6 @@ install_packages(required_packages)
 #import de toutes les librairies necessaires
 import os
 import sqlite3
-from sqlite3 import IntegrityError
-import math
 import time
 import pandas as pd
 from pathlib import Path
@@ -35,18 +33,12 @@ from IPython.display import display
 import numpy as np
 import tkinter as tk
 from tkinter import messagebox
-from datetime import date, timedelta
 import random
-from dateutil.relativedelta import relativedelta
-from datetime import datetime
-
-from scipy import integrate
-from scipy.optimize import brentq
-from sklearn.pipeline import make_pipeline
-from sklearn.model_selection import train_test_split,GridSearchCV
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import r2_score
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 def Deleting_output_DB(path_db):
@@ -1607,128 +1599,6 @@ def Generate_DATE_TAR(df_avg, df_tmp):
 
     return df_tmp
 
-def get_valid_sample(df_filtered, col_t='Veil_Duration', col_y='LAIT_24_OBS'):
-    """
-    Returns 3 strategic points for Wood model fitting:
-    - 1 early point (before peak)
-    - 1 peak point (max y)
-    - 1 late point (after peak)
-    Falls back to default values if not enough valid points or no points before/after peak.
-    """
-    DEFAULT_T, DEFAULT_Y = 30, 200
-
-    valid_df = df_filtered[
-        (df_filtered[col_t] > 0) & (df_filtered[col_y] > 0)
-    ].reset_index(drop=True)
-    n_valid = len(valid_df)
-
-    if n_valid >= 3:
-        # Point au pic (y max)
-        idx_peak = valid_df[col_y].idxmax()
-        t_peak = valid_df.loc[idx_peak, col_t]
-
-        before_peak = valid_df[valid_df[col_t] < t_peak]
-        after_peak = valid_df[valid_df[col_t] > t_peak]
-
-        # Pas de point avant ou après le pic → fallback défauts
-        if len(before_peak) == 0 or len(after_peak) == 0:
-            return {
-                't': [DEFAULT_T, DEFAULT_T * 2, DEFAULT_T * 3],
-                'result': [DEFAULT_Y * 1.2, DEFAULT_Y, DEFAULT_Y * 0.8]
-            }
-
-        idx_early = before_peak[col_t].idxmin()
-        idx_late = after_peak[col_t].idxmax()
-
-        return {
-            't': [valid_df.loc[idx_early, col_t], valid_df.loc[idx_peak, col_t], valid_df.loc[idx_late, col_t]],
-            'result': [valid_df.loc[idx_early, col_y], valid_df.loc[idx_peak, col_y], valid_df.loc[idx_late, col_y]]
-        }
-
-    elif n_valid > 0:
-        # Fill missing points with defaults
-        dic_res = {
-            't': list(valid_df[col_t]),
-            'result': list(valid_df[col_y])
-        }
-        fill_t = [DEFAULT_T, DEFAULT_T * 2, DEFAULT_T * 3]
-        fill_y = [DEFAULT_Y, DEFAULT_Y * 1.2, DEFAULT_Y * 0.8]
-        idx = 0
-        while len(dic_res['t']) < 3:
-            dic_res['t'].append(fill_t[idx])
-            dic_res['result'].append(fill_y[idx])
-            idx += 1
-        return dic_res
-
-    else:
-        # No valid points at all
-        return {
-            't': [DEFAULT_T, DEFAULT_T * 2, DEFAULT_T * 3],
-            'result': [DEFAULT_Y * 1.2, DEFAULT_Y, DEFAULT_Y * 0.8]
-        }
-
-def wood_from_3_points(t1, y1, t2, y2, t3, y3):
-    """
-    Calculate Wood parameters a, b, c from 3 points (t, y).
-    Uses log-linearization: ln(y) = ln(a) + b*ln(t) - c*t
-    """
-    M = np.array([
-        [1, np.log(t1), -t1],
-        [1, np.log(t2), -t2],
-        [1, np.log(t3), -t3]
-    ])
-    rhs = np.array([np.log(y1), np.log(y2), np.log(y3)])
-    ln_a, b, c = np.linalg.solve(M, rhs)
-
-    if abs(ln_a) > 10:  # a must stay between e^-10 and e^10 ~ [0.00005, 22026]
-        raise ValueError(f"ln_a out of range ({ln_a:.1f}), aberrant solution")
-
-    a = np.exp(ln_a)
-    if not (10 <= a <= 800):  # valeurs biologiquement plausibles
-        raise ValueError(f"a={a:.1f} hors plage biologique")
-    if not (0.1 < b < 0.5):  # b typically between 0.1 et 0.5 -> client
-        raise ValueError(f"b={b:.3f} hors plage")
-    if not (0 < c < 0.1):  # c little
-        raise ValueError(f"c={c:.4f} hors plage")
-    return {'a': a, 'b': b, 'c': c}
-
-
-
-def solve_c(t_pic, persistance):
-    P = persistance / 100
-    def equation(c):
-        b = c * t_pic
-        return ((t_pic + 30) / t_pic) ** b * np.exp(-30 * c) - P
-    try:
-        c = brentq(equation, 1e-6, 0.1)
-        return c
-    except ValueError:
-        return None
-
-def wood_from_pic_persistance(t_pic, y_pic, persistance):
-    c = solve_c(t_pic, persistance)
-    if c is None:
-        raise ValueError(f"Impossible de résoudre c pour t_pic={t_pic}, persistance={persistance}")
-    b = c * t_pic
-    a = y_pic / ((t_pic ** b) * np.exp(-b))
-    return {'a': a, 'b': b, 'c': c}
-
-def total_milk(row):
-    """
-    Calcule la production totale de lait sur T jours (modèle de Wood).
-    y(t) = a * t^b * e^(-c*t)
-    
-    Paramètres:
-        a, b, c : paramètres Wood
-        T       : durée de lactation en jours
-    
-    Retourne:
-        Production totale en 100g (même unité que LAIT_24_OBS)
-    """
-    a,b,c,T = row['a'],row['b'],row['c'],row['deltaMonthVelTar']
-    total, _ = integrate.quad(lambda t: a * (t ** b) * np.exp(-c * t), 1, T)
-    return round(total, 1)
-
 def recovering_all_actiel(conn):
     all_actiel = conn.execute(
         '''
@@ -1736,7 +1606,29 @@ def recovering_all_actiel(conn):
         '''
     ).fetchall()
     return all_actiel
-    
+
+def GBR(df_CLLAITLACT,df_actiel_col, df_other_col, target, n_estimators, max_depth, lr):
+    features = df_actiel_col + df_other_col
+    X = df_CLLAITLACT[features].values
+    y = df_CLLAITLACT[target].values
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('model', GradientBoostingRegressor(
+            n_estimators=n_estimators, max_depth=max_depth, learning_rate=lr, random_state=42
+        ))
+    ])
+
+    pipeline.fit(X_train, y_train)
+
+    y_pred = pipeline.predict(X_test)
+
+    print(f"R² {target} : {r2_score(y_test, y_pred):.4f}")
+    return pipeline
+
+
 
 if __name__ == "__main__":
 
@@ -2152,17 +2044,62 @@ if __name__ == "__main__":
                             # CL_LAITLACT -> LAIT
                             ############################################################################################################## 
                             '''
-                            In order to calculate LAIT we need to answer the wood equation : y(t) = a · t^b · e^(−c·t) where y(4) means production à day 4 of veil
-                            so we'll need to define parameter a,b,c for EACH veil 
-                            To do that let's use regression model but to perform regression we'll need to determine a,b,c for each veil we had in input db
-                            In order to determine a 3 unknown equation, we need.... 3 equations 
-                            Exemple :
-                            y(3) : 40 = a* 3^b * e^(-c*3)
-                            y(4) : 50 = a* 4^b * e^(-c*4)
-                            y(5) : 60 = a* 5^b * e^(-c*5)
-                            gives
-                            a = 17,645 b = 0,6325 c= −0,0412
+                            In order to calculate LAIT we will use gradientboosterregressor to determine LAIT from
+                            ACTIEL
+                            MonthVeil
+                            Veil Duration
                             '''
+                            # recovering CL_LAITLACT
+                            query ="""
+
+                            SELECT 
+                                    cll.ID_LAITLACT,
+                                    cll.NOLACT,
+                                    ia.ACTIEL,
+                                    strftime('%m', DATE_VEL) as Month,
+                                    julianday(DATE(DATE_TAR))-julianday(DATE(DATE_VEL)) AS Veil_Duration,
+                                    cll.LAIT,
+                                    cll.MG,
+                                    cll.PROT,
+                                    cll.PIC,
+                                    cll.PERSISTANCE
+                                FROM CL_LAITLACT cll
+                                JOIN IDENTANV ia ON cll.NOAN = ia.NOAN
+                                where DATE_TAR is not NULL and LAIT is not NULL
+
+                            """
+                            df_CLLAITLACT = pd.read_sql(query, src_conn)
+
+                            #Get dummies to handle ACTIEL
+                            dummies = pd.get_dummies(df_CLLAITLACT['ACTIEL'], prefix='ACTIEL', drop_first=True)
+                            df_CLLAITLACT['ID_LAITLACT'].astype(int)
+                            df_CLLAITLACT = pd.concat([df_CLLAITLACT, dummies], axis=1)
+                            df_CLLAITLACT.drop(columns=['ACTIEL'], inplace=True)
+
+
+                            # issue number of columns differs between src and dst... recovering all actiel
+                            raa=recovering_all_actiel(dst_conn)
+                            all_actiel= [raa[i][0] for i in range (len(raa))]
+                            all_actiel_order = ['ACTIEL_'+e for e in all_actiel]
+                            t= df_CLLAITLACT.columns
+                            #checking if all columns are in the dataframe
+                            for e in all_actiel:
+                                if 'ACTIEL_'+e not in t:
+                                    df_CLLAITLACT['ACTIEL_'+e] = False
+
+                            col3=df_CLLAITLACT.columns[1:9]
+                            order_col = pd.Index(list(col3) + list(all_actiel_order))
+
+                            df_CLLAITLACT= df_CLLAITLACT[order_col]
+
+                            # Features : colonnes ACTIEL_XX + other
+                            actiel_cols = [col for col in df_CLLAITLACT.columns if col.startswith('ACTIEL_')]
+
+                            model_LAIT = GBR(df_CLLAITLACT,actiel_cols,['NOLACT','Month','Veil_Duration'],'LAIT',200,4,0.05)
+
+                            model_MG = GBR(df_CLLAITLACT,[],['LAIT'],'MG',200,4,0.05) #only use LAIT to predict MG
+
+                            model_PROT = GBR(df_CLLAITLACT,[],['LAIT'],'PROT',200,4,0.05) #only use LAIT to predict PROT
                             
                             
 
