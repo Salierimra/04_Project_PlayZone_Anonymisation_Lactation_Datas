@@ -2087,7 +2087,7 @@ if __name__ == "__main__":
                                 if 'ACTIEL_'+e not in t:
                                     df_CLLAITLACT['ACTIEL_'+e] = False
 
-                            col3=df_CLLAITLACT.columns[1:9]
+                            col3=df_CLLAITLACT.columns[1:11]
                             order_col = pd.Index(list(col3) + list(all_actiel_order))
 
                             df_CLLAITLACT= df_CLLAITLACT[order_col]
@@ -2100,9 +2100,69 @@ if __name__ == "__main__":
                             model_MG = GBR(df_CLLAITLACT,[],['LAIT'],'MG',200,4,0.05) #only use LAIT to predict MG
 
                             model_PROT = GBR(df_CLLAITLACT,[],['LAIT'],'PROT',200,4,0.05) #only use LAIT to predict PROT
-                            
-                            
 
+                            model_PIC = GBR(df_CLLAITLACT,actiel_cols,['NOLACT','Month','Veil_Duration','LAIT'],'PIC',200,4,0.05)
+
+                            model_PERS = GBR(df_CLLAITLACT,actiel_cols,['NOLACT','Month','Veil_Duration','LAIT','PIC'],'PERSISTANCE',200,4,0.05)
+                            
+                            query ="""
+
+                            select 
+                            cl.ID_LAITLACT,
+                            cl.NOAN,
+                            ia.ACTIEL,
+                            cl.NOLACT,
+                            strftime('%m', cl.DATE_VEL) as Month_Veil,
+                            julianday(DATE(COALESCE(cl.DATE_TAR, date('now'))))-julianday(DATE(cl.DATE_VEL)) AS Veil_Duration
+                            from CL_LAITLACT cl
+                            join IDENTANV ia on ia.NOAN = cl.NOAN
+
+                            """
+                            df_CLLAITLACT_dst = pd.read_sql(query, dst_conn)
+
+
+                            #Get dummies to handle ACTIEL
+                            dummies = pd.get_dummies(df_CLLAITLACT_dst['ACTIEL'], prefix='ACTIEL', drop_first=True)
+                            df_CLLAITLACT_dst['ID_LAITLACT'].astype(int)
+                            df_CLLAITLACT_dst = pd.concat([df_CLLAITLACT_dst, dummies], axis=1)
+                            df_CLLAITLACT_dst.drop(columns=['ACTIEL'], inplace=True)
+
+
+                            # issue number of columns differs between src and dst... recovering all actiel
+                            raa=recovering_all_actiel(dst_conn)
+                            all_actiel= [raa[i][0] for i in range (len(raa))]
+                            all_actiel_order = ['ACTIEL_'+e for e in all_actiel]
+                            t= df_CLLAITLACT_dst.columns
+                            #checking if all columns are in the dataframe
+                            for e in all_actiel:
+                                if 'ACTIEL_'+e not in t:
+                                    df_CLLAITLACT_dst['ACTIEL_'+e] = False
+                            col5=df_CLLAITLACT_dst.columns[1:5]
+                            order_col = pd.Index(list(col5) + list(all_actiel_order))
+
+                            df_CLLAITLACT_dst= df_CLLAITLACT_dst[order_col]
+
+                            X = df_CLLAITLACT_dst.drop(columns=['NOAN'])
+                            df_CLLAITLACT_dst['LAIT'] = model_LAIT.predict(X)
+                            X = df_CLLAITLACT_dst[['LAIT']]
+                            df_CLLAITLACT_dst['MG'] = model_MG.predict(X)
+                            X = df_CLLAITLACT_dst[['LAIT']]
+                            df_CLLAITLACT_dst['PROT'] = model_PROT.predict(X)
+                            X = df_CLLAITLACT_dst.drop(columns=['NOAN','MG','PROT'])
+                            df_CLLAITLACT_dst['PIC'] = model_PIC.predict(X)
+                            X = df_CLLAITLACT_dst.drop(columns=['NOAN','MG','PROT'])
+                            df_CLLAITLACT_dst['PERSISTANCE'] = model_PERS.predict(X)
+
+                            df_CL_LAITLACT_dst['LAIT']=df_CLLAITLACT_dst['LAIT']
+                            df_CL_LAITLACT_dst['MG']=df_CLLAITLACT_dst['MG']
+                            df_CL_LAITLACT_dst['PROT']=df_CLLAITLACT_dst['PROT']
+                            df_CL_LAITLACT_dst['PIC']=df_CLLAITLACT_dst['PIC']
+                            df_CL_LAITLACT_dst['PERSISTANCE']=df_CLLAITLACT_dst['PERSISTANCE']
+
+                            df_CL_LAITLACT_dst.to_sql("CL_LAITLACT", dst_conn, if_exists="replace", index=False)
+
+                            print("         7.3.3 Generation table CL_LAITCTRL")
+                            
                             print("finish")
 
                             
